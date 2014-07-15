@@ -175,26 +175,26 @@ infer_ilt ctx expr =
     Fst e => do
       (t, ctx1) <- infer_ilt ctx e
       case t of 
-        IPair t1 t2 => pure (t1, ctx1)
+        IPair t1 t2 => pure (t1, insert expr t1 ctx1)
         ITypeVar v => do
           t1 <- freshTyVar
           t2 <- freshTyVar
           let ty = IPair t1 t2
           case unify ctx1 t ty of
                Left err => raise err
-               Right ctx2 => pure (t1, ctx2)
+               Right ctx2 => pure (t1, insert expr t1 ctx2)
         _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
     Snd e => do
       (t, ctx1) <- infer_ilt ctx e
       case t of 
-        IPair t1 t2 => pure (t2, ctx1)
+        IPair t1 t2 => pure (t2, insert expr t2 ctx1)
         ITypeVar v => do
           t1 <- freshTyVar
           t2 <- freshTyVar
           let ty = IPair t1 t2
           case unify ctx1 t ty of
                Left err => raise err
-               Right ctx2 => pure (t2, ctx2)
+               Right ctx2 => pure (t2, insert expr t2 ctx2)
         _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
     Arith op e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
@@ -231,18 +231,26 @@ genSharp : Ctx2 -> il_expr -> { [STATE (List String)] } Eff m String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
 genSharp ctx (Var v) = pure v
-genSharp ctx (Pair e1 e2) = pure $ "pair(" ++ !(genSharp ctx e1) ++ ", " ++ !(genSharp ctx e2) ++ ")"
+genSharp ctx (Pair e1 e2) = 
+  case lookup (Pair e1 e2) ctx of
+    Just (IPair t1 t2) => pure $ "pair<" ++ tySharp t1 ++ ", " ++ tySharp t2 ++">(" ++ 
+                                    !(genSharp ctx e1) ++ ", " ++ !(genSharp ctx e2) ++ ")"
+    _ => pure $ "Err: no type for " ++ show (Pair e1 e2)
 genSharp ctx (Fst e) = pure $ !(genSharp ctx e) ++ ".fst"
 genSharp ctx (Snd e) = pure $ !(genSharp ctx e) ++ ".snd"
 genSharp ctx (Arith op e1 e2) = pure $ "("++ !(genSharp ctx e1) ++" "++ show op ++" "++ !(genSharp ctx e2) ++")"
 genSharp ctx Stop = case lookup Stop ctx of
                       Nothing => pure "Err: Stop type not found"
-                      Just ty => addDef ty $ "x => { throw new Res<" ++ argTy ty ++ ">(x); }"
+                      Just ty => pure $ "x => { throw new Res<" ++ argTy ty ++ ">(x); }"
 genSharp ctx (Lambda v e) = let exp = Lambda v e in
                             case lookup exp ctx of
                               Nothing =>  pure $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
-                              Just ty => addDef ty $ v ++ " => " ++ !(genSharp ctx e)
-genSharp ctx (RunCont f x) = pure $ !(genSharp ctx f) ++ "(" ++ !(genSharp ctx x) ++ ")"
+                              Just ty => pure $ v ++ " => " ++ !(genSharp ctx e)
+genSharp ctx (RunCont f x) = 
+  case lookup f ctx of
+    Just (INot t) => pure $ "run<" ++ tySharp t ++ ">(" ++ !(genSharp ctx f) ++ ", " ++ !(genSharp ctx x) ++ ")"
+    Just t => pure $ "Err?: " ++ show f ++ " has type " ++ show t
+    _ => pure $ "Type err with " ++ show f
 
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
