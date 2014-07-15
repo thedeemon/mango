@@ -147,7 +147,8 @@ infer_ilt ctx expr =
   case expr of
     Unit => pure (IUnit, ctx)
     Const _ => pure (IInt, ctx)
-    Stop => pure (!freshTyVar, ctx)
+    Stop => do ty <- freshTyVar
+               pure (ty, insert Stop ty ctx)
     Var v => case lookup expr ctx of
                Just t => pure (t, ctx)
                Nothing => do tvar <- freshTyVar
@@ -198,12 +199,50 @@ infer_ilt ctx expr =
     Arith op e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
-      case unify ctx2 t1 IInt of
+      case (do unify !(unify ctx2 t1 IInt) t2 IInt) of 
         Left err => raise err
-        Right ctx3 => case unify ctx3 t2 IInt of
-                        Left err => raise err
-                        Right ctx4 => pure (IInt, ctx4)
+        Right ctx4 => pure (IInt, ctx4)
                      
+showCtx : Ctx -> String
+showCtx ctx = show $ Data.SortedMap.toList ctx
+
+tySharp : ILType -> String
+tySharp IInt = "int"
+tySharp IUnit = "Unit"
+tySharp (IPair a b) = "Pair<" ++ tySharp a ++ ", " ++ tySharp b ++ ">"
+tySharp (INot t) = "Kont<" ++ tySharp t ++ ">"
+tySharp IFalse = " Err: 0 type "
+tySharp (ITypeVar n) = " Err: unresolved type var t" ++ show n
+
+addDef : ILType -> String -> {[STATE (List String)]} Eff m String
+addDef ty s = do xs <- get
+                 let f = "f" ++ show (length xs) 
+                 put $ (tySharp ty ++ " " ++ f ++ " = " ++ s ++ ";") :: xs
+                 return f
+
+Ctx2 : Type
+Ctx2 = List (il_expr, ILType)
+
+argTy : ILType -> String
+argTy (INot t) = tySharp t
+argTy t = "Err: argTy for positive type " ++ show t
+
+genSharp : Ctx2 -> il_expr -> { [STATE (List String)] } Eff m String
+genSharp ctx Unit = pure "unit"
+genSharp ctx (Const n) = pure $ show n
+genSharp ctx (Var v) = pure v
+genSharp ctx (Pair e1 e2) = pure $ "pair(" ++ !(genSharp ctx e1) ++ ", " ++ !(genSharp ctx e2) ++ ")"
+genSharp ctx (Fst e) = pure $ !(genSharp ctx e) ++ ".fst"
+genSharp ctx (Snd e) = pure $ !(genSharp ctx e) ++ ".snd"
+genSharp ctx (Arith op e1 e2) = pure $ "("++ !(genSharp ctx e1) ++" "++ show op ++" "++ !(genSharp ctx e2) ++")"
+genSharp ctx Stop = case lookup Stop ctx of
+                      Nothing => pure "Err: Stop type not found"
+                      Just ty => addDef ty $ "x => { throw new Res<" ++ argTy ty ++ ">(x); }"
+genSharp ctx (Lambda v e) = let exp = Lambda v e in
+                            case lookup exp ctx of
+                              Nothing =>  pure $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
+                              Just ty => addDef ty $ v ++ " => " ++ !(genSharp ctx e)
+genSharp ctx (RunCont f x) = pure $ !(genSharp ctx f) ++ "(" ++ !(genSharp ctx x) ++ ")"
 
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
@@ -284,3 +323,26 @@ typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e
 prg2_types : List String
 prg2_types = typeCheckIL prg2_il
 
+--
+
+rootSharp : String -> String
+rootSharp exp = unwords $ intersperse "\n" ["\ntry",
+            "{",
+                exp ++ ";",
+            "}",
+            "catch (Res<int> r)",
+            "{",
+                "Console.WriteLine(\"result: {0}\", r.res);",
+            "}"]
+
+mkSharp : il_expr -> String
+mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
+              Left err => err
+              Right (ty, ctx) => 
+                let res = do mainExp <- genSharp (Data.SortedMap.toList ctx) e
+                             defs <- get
+                             pure $ (unwords $ intersperse "\n" (reverse defs)) ++ rootSharp mainExp
+                in runPure res
+
+main : IO ()
+main = putStrLn $ mkSharp prg_il
