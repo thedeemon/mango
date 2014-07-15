@@ -1,5 +1,7 @@
 module Main
 import Effect.State
+import Effect.Exception
+import Data.SortedMap
 
 data Op = Add | Mul
 var : Type
@@ -13,6 +15,43 @@ data il_expr = Var name | Const Int | Unit | Pair il_expr il_expr | Lambda name 
              | RunCont il_expr il_expr -- e1 e2
              | Arith Op il_expr il_expr
              | Stop
+
+instance Eq Op where
+  Add == Add = True
+  Mul == Mul = True
+  _ == _ = False
+
+instance Show Op where
+  show Add = "+"
+  show Mul = "*"
+
+instance Eq il_expr where 
+  Stop == Stop = True
+  (Var a) == (Var b) = a == b
+  (Const a) == (Const b) = a == b
+  Unit == Unit = True
+  (Pair a b) == (Pair c d) = a == c && b == d
+  (Lambda a b) == (Lambda c d) = a == c && b == d
+  (Fst a) == (Fst b) = a == b
+  (Snd a) == (Snd b) = a == b
+  (RunCont a b) == (RunCont c d) = a == c && b == d
+  (Arith op1 a b) == (Arith op2 c d) = op1 == op2 && a == c && b == d
+  _ == _ = False
+
+instance Show il_expr where
+  show (Var v) = v
+  show (Const x) = show x
+  show Unit = "Unit"
+  show (Pair a b) = "(" ++ show a ++ ", " ++ show b ++ ")"
+  show (Lambda v e) = "\\" ++ v ++ " . " ++ show e
+  show (Fst e) = "fst " ++ show e
+  show (Snd e) = "snd " ++ show e
+  show (RunCont a b) = "[" ++ show a ++ " <| " ++ show b ++ "]"
+  show (Arith op a b) = show a ++ " " ++ show op ++ " " ++ show b
+  show Stop = "Stop"
+
+instance Ord il_expr where
+  compare a b = compare (show a) (show b)
 
 mutual 
   data rt_val = VInt Int | VUnit | VPair rt_val rt_val | VCont name il_expr Env | VStop
@@ -69,14 +108,103 @@ subst var sub ex =
     RunCont e1 e2 => RunCont (subst var sub e1) (subst var sub e2)
     Arith op e1 e2 => Arith op (subst var sub e1) (subst var sub e2)
                         
+data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse
 
---
-t1 : il_expr
-t1 = Pair (Const 1) (Const 2)
+instance Show ILType where
+  show IInt = "Int"
+  show IUnit = "Unit"
+  show (IPair t1 t2) = "(" ++ show t1 ++", " ++ show t2 ++ ")"
+  show (INot t) = "-" ++ show t
+  show (ITypeVar n) = "t" ++ show n
+  show IFalse = "0"
 
-swp : il_expr
-swp = Lambda "p" (Pair (Snd (Var "p")) 
-                       (Fst (Var "p")))
+Ctx : Type
+Ctx = SortedMap il_expr ILType
+
+freshTyVar : { [STATE Int] } Eff m ILType
+freshTyVar = do vn <- get
+                put (vn + 1)
+                pure $ ITypeVar vn
+
+tysub : Int -> ILType -> ILType -> ILType
+tysub v sub (ITypeVar n) = if n == v then sub else ITypeVar n
+tysub v sub (IPair t1 t2) = IPair (tysub v sub t1) (tysub v sub t2)
+tysub v sub (INot t) = INot (tysub v sub t)
+tysub v sub t = t
+
+unify : Ctx -> ILType -> ILType -> Either String Ctx
+unify ctx (ITypeVar v) t2 = Right $ map (tysub v t2) ctx
+unify ctx t1 (ITypeVar v) = Right $ map (tysub v t1) ctx
+unify ctx (INot t1) (INot t2) = unify ctx t1 t2
+unify ctx (IPair a1 a2) (IPair b1 b2) = unify !(unify ctx a1 b1) a2 b2
+unify ctx IInt IInt = Right ctx
+unify ctx IUnit IUnit = Right ctx
+unify ctx IFalse IFalse = Right ctx
+unify ctx t1 t2 = Left $ "cannot unify " ++ show t1 ++ " and " ++ show t2
+
+infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff m (ILType, Ctx)
+infer_ilt ctx expr = 
+  case expr of
+    Unit => pure (IUnit, ctx)
+    Const _ => pure (IInt, ctx)
+    Stop => pure (!freshTyVar, ctx)
+    Var v => case lookup expr ctx of
+               Just t => pure (t, ctx)
+               Nothing => do tvar <- freshTyVar
+                             let ctx' = insert expr tvar ctx
+                             pure (tvar, ctx')
+    Lambda v exp => do
+      (_, ctx1) <- infer_ilt ctx exp
+      (tv, ctx2) <- infer_ilt ctx1 (Var v)
+      let ty = INot tv
+      let ctx3 = insert expr ty ctx2
+      pure (ty, ctx3)
+    RunCont e1 e2 => do
+      (t2, ctx2) <- infer_ilt ctx e2
+      (t1, ctx3) <- infer_ilt ctx2 e1
+      case unify ctx3 t1 (INot t2) of
+        Left err => raise err
+        Right ctx4 => pure (IFalse, ctx4)
+    Pair e1 e2 => do
+      (t1, ctx1) <- infer_ilt ctx e1
+      (t2, ctx2) <- infer_ilt ctx1 e2
+      let ty = IPair t1 t2
+      let ctx3 = insert expr ty ctx2
+      pure (ty, ctx3)
+    Fst e => do
+      (t, ctx1) <- infer_ilt ctx e
+      case t of 
+        IPair t1 t2 => pure (t1, ctx1)
+        ITypeVar v => do
+          t1 <- freshTyVar
+          t2 <- freshTyVar
+          let ty = IPair t1 t2
+          case unify ctx1 t ty of
+               Left err => raise err
+               Right ctx2 => pure (t1, ctx2)
+        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
+    Snd e => do
+      (t, ctx1) <- infer_ilt ctx e
+      case t of 
+        IPair t1 t2 => pure (t2, ctx1)
+        ITypeVar v => do
+          t1 <- freshTyVar
+          t2 <- freshTyVar
+          let ty = IPair t1 t2
+          case unify ctx1 t ty of
+               Left err => raise err
+               Right ctx2 => pure (t2, ctx2)
+        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
+    Arith op e1 e2 => do
+      (t1, ctx1) <- infer_ilt ctx e1
+      (t2, ctx2) <- infer_ilt ctx1 e2
+      case unify ctx2 t1 IInt of
+        Left err => raise err
+        Right ctx3 => case unify ctx3 t2 IInt of
+                        Left err => raise err
+                        Right ctx4 => pure (IInt, ctx4)
+                     
+
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
@@ -146,3 +274,13 @@ prg3 = TArith Add (TConst 1) (TConst 2)
 
 prg3_il : il_expr
 prg3_il = runPure $ compile_lazy Stop prg3
+
+typeCheckIL : il_expr -> List String
+typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
+                  Left err => [err]
+                  Right (t, ctx) => map show $ Data.SortedMap.toList ctx
+
+
+prg2_types : List String
+prg2_types = typeCheckIL prg2_il
+
