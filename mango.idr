@@ -248,7 +248,7 @@ genSharp ctx (Lambda v e) = let exp = Lambda v e in
                               Just ty => pure $ v ++ " => " ++ !(genSharp ctx e)
 genSharp ctx (RunCont f x) = 
   case lookup f ctx of
-    Just (INot t) => pure $ "run<" ++ tySharp t ++ ">(" ++ !(genSharp ctx f) ++ ", " ++ !(genSharp ctx x) ++ ")"
+    Just (INot t) => pure $ "() => run<" ++ tySharp t ++ ">(" ++ !(genSharp ctx f) ++ ", " ++ !(genSharp ctx x) ++ ")"
     Just t => pure $ "Err?: " ++ show f ++ " has type " ++ show t
     _ => pure $ "Type err with " ++ show f
 
@@ -333,15 +333,22 @@ prg2_types = typeCheckIL prg2_il
 
 --
 
-rootSharp : String -> String
-rootSharp exp = unwords $ intersperse "\n" ["\ntry",
-            "{",
-                exp ++ ";",
-            "}",
-            "catch (Res<int> r)",
+rootSharp : String -> String -> String
+rootSharp exp resTy = unwords $ intersperse "\n" ["\nThunk fmain = " ++ exp ++ ";",
+            "try",
+            "{", 
+               "while(true) {",
+                 "fmain = fmain();",
+               "}",
+            "} catch (Res<"++resTy++"> r)",
             "{",
                 "Console.WriteLine(\"result: {0}\", r.res);",
             "}"]
+
+resultType : Ctx -> String
+resultType ctx = case lookup Stop ctx of
+                   Nothing => "lost result type"
+                   Just sty => argTy sty
 
 mkSharp : il_expr -> String
 mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
@@ -349,7 +356,8 @@ mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
               Right (ty, ctx) => 
                 let res = do mainExp <- genSharp (Data.SortedMap.toList ctx) e
                              defs <- get
-                             pure $ (unwords $ intersperse "\n" (reverse defs)) ++ rootSharp mainExp
+                             let resTy = resultType ctx
+                             pure $ (unwords $ intersperse "\n" (reverse defs)) ++ rootSharp mainExp resTy
                 in runPure res
 
 main : IO ()
