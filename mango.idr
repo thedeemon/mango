@@ -3,7 +3,7 @@ import Effect.State
 import Effect.Exception
 import Data.SortedMap
 
-data Op = Add | Mul
+data Op = Add | Mul | Eql | Less
 var : Type
 var = String
 
@@ -19,11 +19,15 @@ data il_expr = Var name | Const Int | Unit | Stop
 instance Eq Op where
   Add == Add = True
   Mul == Mul = True
+  Eql == Eql = True
+  Less == Less = True
   _ == _ = False
 
 instance Show Op where
   show Add = "+"
   show Mul = "*"
+  show Eql = "="
+  show Less = "<"
 
 instance Eq il_expr where 
   Stop == Stop = True
@@ -77,6 +81,8 @@ getv env var with (lookup var env)
 doArith : Op -> rt_val -> rt_val -> RtVal
 doArith Add (VInt a) (VInt b) = Right $ VInt (a + b)
 doArith Mul (VInt a) (VInt b) = Right $ VInt (a * b)
+doArith Eql (VInt a) (VInt b) = Right $ if a == b then VRight VUnit else VLeft VUnit
+doArith Less (VInt a) (VInt b) = Right $ if a < b then VRight VUnit else VLeft VUnit
 doArith _ _ _ = Left "bad args in Arith"
 
 
@@ -162,6 +168,13 @@ unify ctx IFalse IFalse = Right ctx
 unify ctx (ISum a1 a2) (ISum b1 b2) = unify !(unify ctx a1 b1) a2 b2
 unify ctx t1 t2 = Left $ "cannot unify " ++ show t1 ++ " and " ++ show t2
 
+opResTy : Op -> ILType
+opResTy Add = IInt
+opResTy Mul = IInt
+opResTy Eql = ISum IUnit IUnit
+opResTy Less = ISum IUnit IUnit
+
+
 infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff m (ILType, Ctx)
 infer_ilt ctx expr = 
   case expr of
@@ -221,7 +234,7 @@ infer_ilt ctx expr =
       (t2, ctx2) <- infer_ilt ctx1 e2
       case (do unify !(unify ctx2 t1 IInt) t2 IInt) of 
         Left err => raise err
-        Right ctx4 => pure (IInt, ctx4)
+        Right ctx4 => pure (opResTy op, ctx4)
     Lefta e => do
       (t, ctx1) <- infer_ilt ctx e
       t2 <- freshTyVar
@@ -269,7 +282,7 @@ argTy : ILType -> String
 argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
-genSharp : Ctx2 -> il_expr -> { [STATE (List String)] } Eff m String
+genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff m String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
 genSharp ctx (Var v) = pure v
@@ -277,35 +290,39 @@ genSharp ctx (Pair e1 e2) =
   case lookup (Pair e1 e2) ctx of
     Just (IPair t1 t2) => pure $ "pair<" ++ tySharp t1 ++ ", " ++ tySharp t2 ++">(" ++ 
                                     !(genSharp ctx e1) ++ ", " ++ !(genSharp ctx e2) ++ ")"
-    _ => pure $ "Err: no type for " ++ show (Pair e1 e2)
+    _ => raise $ "Err: no type for " ++ show (Pair e1 e2)
 genSharp ctx (Fst e) = pure $ !(genSharp ctx e) ++ ".fst"
 genSharp ctx (Snd e) = pure $ !(genSharp ctx e) ++ ".snd"
-genSharp ctx (Arith op e1 e2) = pure $ "("++ !(genSharp ctx e1) ++" "++ show op ++" "++ !(genSharp ctx e2) ++")"
+genSharp ctx (Arith op e1 e2) =
+  case op of
+    Eql  => pure $  "eql("++ !(genSharp ctx e1) ++", "++ !(genSharp ctx e2) ++")"
+    Less => pure $ "less("++ !(genSharp ctx e1) ++", "++ !(genSharp ctx e2) ++")"
+    _    => pure $ "("++ !(genSharp ctx e1) ++" "++ show op ++" "++ !(genSharp ctx e2) ++")"
 genSharp ctx Stop = case lookup Stop ctx of
-                      Nothing => pure "Err: Stop type not found"
+                      Nothing => raise "Err: Stop type not found"
                       Just ty => pure $ "x => { throw new Res<" ++ argTy ty ++ ">(x); }"
 genSharp ctx (Lambda v e) = let exp = Lambda v e in
                             case lookup exp ctx of
-                              Nothing =>  pure $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
+                              Nothing =>  raise $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
                               Just ty => pure $ v ++ " => " ++ !(genSharp ctx e)
 genSharp ctx (RunCont f x) = 
   case lookup f ctx of
     Just (INot t) => pure $ "() => run<" ++ tySharp t ++">("++ !(genSharp ctx f) ++", "++ !(genSharp ctx x) ++")"
-    Just t => pure $ "Err?: " ++ show f ++ " has type " ++ show t
-    _ => pure $ "Type err with " ++ show f
+    Just t => raise $ "Err?: " ++ show f ++ " has type " ++ show t
+    _ => raise $ "Type err with " ++ show f
 genSharp ctx (Lefta e) = 
   case lookup (Lefta e) ctx of
     Just (ISum t1 t2) => pure $ "left<" ++ tySharp t1 ++","++ tySharp t2 ++ ">(" ++ !(genSharp ctx e) ++ ")"
-    _ => pure $ "Err: no sum type for " ++ show e
+    _ => raise $ "Err: no sum type for " ++ show e
 genSharp ctx (Righta e) = 
   case lookup (Righta e) ctx of
     Just (ISum t1 t2) => pure $ "right<" ++ tySharp t1 ++","++ tySharp t2 ++ ">(" ++ !(genSharp ctx e) ++ ")"
-    _ => pure $ "Err: no sum type for " ++ show e
+    _ => raise $ "Err: no sum type for " ++ show e
 genSharp ctx (Case e e1 e2) =  
   case lookup e ctx of 
     Just (ISum t1 t2) => pure $ "match<" ++ tySharp t1 ++","++ tySharp t2 ++ ">("  ++ !(genSharp ctx e) ++", "
                                ++ !(genSharp ctx e1) ++", "++ !(genSharp ctx e2) ++ ")"
-    _ => pure $ "Err: no sum type for " ++ show e
+    _ => raise $ "Err: no sum type for " ++ show e
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
@@ -400,9 +417,9 @@ prg2_types : List String
 prg2_types = typeCheckIL prg2_il
 
 prg5 : Term
-prg5 = TCase (TRight $ TConst 7) 
-             (TLambda "l" (TArith Add (TVar "l") (TConst 10))) 
-             (TLambda "r" (TArith Mul (TVar "r") (TConst 11)))
+prg5 = TCase (TArith Less (TConst 40) (TConst 7)) 
+             (TLambda "l" (TConst 0)) 
+             (TLambda "r" (TConst 1))
 
 prg5_il : il_expr
 prg5_il = runPure $ compile_lazy Stop prg5
@@ -426,15 +443,19 @@ resultType ctx = case lookup Stop ctx of
                    Nothing => "lost result type"
                    Just sty => argTy sty
 
-mkSharp : il_expr -> String
+mkSharp : il_expr -> Either String String
 mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
-              Left err => err
+              Left err => Left err
               Right (ty, ctx) => 
                 let res = do mainExp <- genSharp (Data.SortedMap.toList ctx) e
                              defs <- get
                              let resTy = resultType ctx
                              pure $ (unwords $ intersperse "\n" (reverse defs)) ++ rootSharp mainExp resTy
-                in runPure res
+                in the (Either String String) $ run res
+
+phi : Either String String -> String
+phi (Left s) = s
+phi (Right s) = s
 
 main : IO ()
-main = putStrLn $ mkSharp prg5_il
+main = putStrLn $ phi $ mkSharp prg5_il

@@ -73,14 +73,21 @@ namespace mangolian
             throw new Exception("bad Sum value");
         }
 
+        static Sum<Unit, Unit> eql(int a, int b)
+        {
+            if (a == b) return right<Unit, Unit>(unit);
+            else return left<Unit, Unit>(unit);
+        }
+
+        static Sum<Unit, Unit> less(int a, int b)
+        {
+            if (a < b) return right<Unit, Unit>(unit);
+            else return left<Unit, Unit>(unit);
+        }
+
         static void Main(string[] args)
         {
-
-            Thunk fmain = () => run<Sum<Kont<Kont<int>>, Kont<Kont<int>>>>(z0 => match<Kont<Kont<int>>, 
-                Kont<Kont<int>>>(z0, l => () => run<Kont<int>>(l, a1 => () => run<int>(b2 => () => run<int>
-                    (x => { throw new Res<int>(x); }, (a1 + b2)), 10)), r => () => run<Kont<int>>(r, a3 => 
-                        () => run<int>(b4 => () => run<int>(x => { throw new Res<int>(x); }, (a3 * b4)), 11))), 
-                        right<Kont<Kont<int>>, Kont<Kont<int>>>(k5 => () => run<int>(k5, 7)));
+            Thunk fmain = () => run<int>(a1 => () => run<int>(b2 => () => run<Sum<Unit, Unit>>(z0 => match<Unit, Unit>(z0, l => () => run<int>(x => { throw new Res<int>(x); }, 0), r => () => run<int>(x => { throw new Res<int>(x); }, 1)), less(a1, b2)), 7), 40);
             try
             {
                 while (true)
@@ -92,7 +99,7 @@ namespace mangolian
             {
                 Console.WriteLine("result: {0}", r.res);
             }
-
+         
         }//main
     }
 }
