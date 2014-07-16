@@ -10,11 +10,11 @@ var = String
 name : Type
 name = String
 
-data il_expr = Var name | Const Int | Unit | Pair il_expr il_expr | Lambda name il_expr
-             | Fst il_expr | Snd il_expr 
-             | RunCont il_expr il_expr -- e1 e2
-             | Arith Op il_expr il_expr
-             | Stop
+data il_expr = Var name | Const Int | Unit | Stop
+             | Lambda name il_expr | RunCont il_expr il_expr -- e1 e2
+             | Pair il_expr il_expr | Fst il_expr | Snd il_expr              
+             | Arith Op il_expr il_expr            
+             | Lefta il_expr | Righta il_expr | Case il_expr il_expr il_expr
 
 instance Eq Op where
   Add == Add = True
@@ -36,6 +36,9 @@ instance Eq il_expr where
   (Snd a) == (Snd b) = a == b
   (RunCont a b) == (RunCont c d) = a == c && b == d
   (Arith op1 a b) == (Arith op2 c d) = op1 == op2 && a == c && b == d
+  (Lefta a) == (Lefta b) = a == b
+  (Righta a) == (Righta b) = a == b
+  (Case a1 b1 c1) == (Case a2 b2 c2) = a1 == a2 && b1 == b2 && c1 == c2
   _ == _ = False
 
 instance Show il_expr where
@@ -49,12 +52,16 @@ instance Show il_expr where
   show (RunCont a b) = "[" ++ show a ++ " <| " ++ show b ++ "]"
   show (Arith op a b) = show a ++ " " ++ show op ++ " " ++ show b
   show Stop = "Stop"
+  show (Lefta e) = "Left " ++ show e
+  show (Righta e) = "Right " ++ show e
+  show (Case a b c) = "case " ++ show a ++ " { Left -> " ++ show b ++ " | Right -> " ++ show c ++ " }"
 
 instance Ord il_expr where
   compare a b = compare (show a) (show b)
 
 mutual 
   data rt_val = VInt Int | VUnit | VPair rt_val rt_val | VCont name il_expr Env | VStop
+              | VLeft rt_val | VRight rt_val 
 
   Env : Type
   Env = List (name, rt_val)
@@ -84,6 +91,12 @@ eval_il env (Lambda v e) = return $ VCont v e env
 eval_il env (RunCont ef ex) = Left "trying to eval runcont"
 eval_il env (Arith op e1 e2) = doArith op !(eval_il env e1) !(eval_il env e2) 
 eval_il env Stop = return VStop
+eval_il env (Lefta e) = pure $ VLeft !(eval_il env e)
+eval_il env (Righta e) = pure $ VRight !(eval_il env e)
+eval_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
+  case !(eval_il env e) of
+    VLeft v  => eval_il ((x1, v)::env) e1
+    VRight v => eval_il ((x2, v)::env) e2
 
 run_il : Env -> il_expr -> RtVal
 run_il env (RunCont ef ex) = do
@@ -93,6 +106,10 @@ run_il env (RunCont ef ex) = do
     VCont n e env0 => run_il ((n,vx)::env0) e
     VStop => return vx
     _ => Left "bad fun_expr in RunCont"
+run_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
+  case !(eval_il env e) of
+    VLeft v  => run_il ((x1, v)::env) e1
+    VRight v => run_il ((x2, v)::env) e2
 run_il env e = eval_il env e
 
 subst : name -> il_expr -> il_expr -> il_expr
@@ -108,7 +125,7 @@ subst var sub ex =
     RunCont e1 e2 => RunCont (subst var sub e1) (subst var sub e2)
     Arith op e1 e2 => Arith op (subst var sub e1) (subst var sub e2)
                         
-data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse
+data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse | ISum ILType ILType
 
 instance Show ILType where
   show IInt = "Int"
@@ -117,6 +134,7 @@ instance Show ILType where
   show (INot t) = "-" ++ show t
   show (ITypeVar n) = "t" ++ show n
   show IFalse = "0"
+  show (ISum t1 t2) = "{" ++ show t1 ++ " | " ++ show t2 ++ "}"
 
 Ctx : Type
 Ctx = SortedMap il_expr ILType
@@ -130,6 +148,7 @@ tysub : Int -> ILType -> ILType -> ILType
 tysub v sub (ITypeVar n) = if n == v then sub else ITypeVar n
 tysub v sub (IPair t1 t2) = IPair (tysub v sub t1) (tysub v sub t2)
 tysub v sub (INot t) = INot (tysub v sub t)
+tysub v sub (ISum t1 t2) = ISum (tysub v sub t1) (tysub v sub t2)
 tysub v sub t = t
 
 unify : Ctx -> ILType -> ILType -> Either String Ctx
@@ -140,6 +159,7 @@ unify ctx (IPair a1 a2) (IPair b1 b2) = unify !(unify ctx a1 b1) a2 b2
 unify ctx IInt IInt = Right ctx
 unify ctx IUnit IUnit = Right ctx
 unify ctx IFalse IFalse = Right ctx
+unify ctx (ISum a1 a2) (ISum b1 b2) = unify !(unify ctx a1 b1) a2 b2
 unify ctx t1 t2 = Left $ "cannot unify " ++ show t1 ++ " and " ++ show t2
 
 infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff m (ILType, Ctx)
@@ -202,6 +222,27 @@ infer_ilt ctx expr =
       case (do unify !(unify ctx2 t1 IInt) t2 IInt) of 
         Left err => raise err
         Right ctx4 => pure (IInt, ctx4)
+    Lefta e => do
+      (t, ctx1) <- infer_ilt ctx e
+      t2 <- freshTyVar
+      let ty = ISum t t2
+      pure (ty, insert expr ty ctx1)
+    Righta e => do
+      (t, ctx1) <- infer_ilt ctx e
+      t1 <- freshTyVar
+      let ty = ISum t1 t
+      pure (ty, insert expr ty ctx1)
+    Case e e1 e2 => do
+      (t0, ctx0) <- infer_ilt ctx e
+      (t1, ctx1) <- infer_ilt ctx0 e1
+      (t2, ctx2) <- infer_ilt ctx1 e2
+      case (t1, t2) of
+        (INot ty1, INot ty2) =>  
+          case unify ctx2 t0 (ISum ty1 ty2) of
+            Left err => raise err
+            Right ctx3 => pure (IFalse, ctx3)
+        _ => raise "Not lambda types found in case"
+
                      
 showCtx : Ctx -> String
 showCtx ctx = show $ Data.SortedMap.toList ctx
@@ -213,6 +254,7 @@ tySharp (IPair a b) = "Pair<" ++ tySharp a ++ ", " ++ tySharp b ++ ">"
 tySharp (INot t) = "Kont<" ++ tySharp t ++ ">"
 tySharp IFalse = " Err: 0 type "
 tySharp (ITypeVar n) = " Err: unresolved type var t" ++ show n
+tySharp (ISum a b) = "Sum<" ++ tySharp a ++ ", " ++ tySharp b ++ ">"
 
 addDef : ILType -> String -> {[STATE (List String)]} Eff m String
 addDef ty s = do xs <- get
@@ -248,13 +290,26 @@ genSharp ctx (Lambda v e) = let exp = Lambda v e in
                               Just ty => pure $ v ++ " => " ++ !(genSharp ctx e)
 genSharp ctx (RunCont f x) = 
   case lookup f ctx of
-    Just (INot t) => pure $ "() => run<" ++ tySharp t ++ ">(" ++ !(genSharp ctx f) ++ ", " ++ !(genSharp ctx x) ++ ")"
+    Just (INot t) => pure $ "() => run<" ++ tySharp t ++">("++ !(genSharp ctx f) ++", "++ !(genSharp ctx x) ++")"
     Just t => pure $ "Err?: " ++ show f ++ " has type " ++ show t
     _ => pure $ "Type err with " ++ show f
-
+genSharp ctx (Lefta e) = 
+  case lookup (Lefta e) ctx of
+    Just (ISum t1 t2) => pure $ "left<" ++ tySharp t1 ++","++ tySharp t2 ++ ">(" ++ !(genSharp ctx e) ++ ")"
+    _ => pure $ "Err: no sum type for " ++ show e
+genSharp ctx (Righta e) = 
+  case lookup (Righta e) ctx of
+    Just (ISum t1 t2) => pure $ "right<" ++ tySharp t1 ++","++ tySharp t2 ++ ">(" ++ !(genSharp ctx e) ++ ")"
+    _ => pure $ "Err: no sum type for " ++ show e
+genSharp ctx (Case e e1 e2) =  
+  case lookup e ctx of 
+    Just (ISum t1 t2) => pure $ "match<" ++ tySharp t1 ++","++ tySharp t2 ++ ">("  ++ !(genSharp ctx e) ++", "
+                               ++ !(genSharp ctx e1) ++", "++ !(genSharp ctx e2) ++ ")"
+    _ => pure $ "Err: no sum type for " ++ show e
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
+             | TLeft Term | TRight Term | TCase Term Term Term
 
 
 mkvar : String -> { [STATE Int] } Eff id String
@@ -294,7 +349,15 @@ mutual
                      (Lambda v2 (RunCont k (Arith op (Var v1) (Var v2)))
                      ) e2)
                  ) e1
-    
+  compile_lazy k (TLeft e) = pure $ RunCont k (Lefta !(lz e))
+  compile_lazy k (TRight e) = pure $ RunCont k (Righta !(lz e))
+  compile_lazy k (TCase sume (TLambda v1 e1) (TLambda v2 e2)) = do
+    z <- mkvar "z"
+    case1 <- compile_lazy k e1
+    case2 <- compile_lazy k e2
+    compile_lazy (Lambda z (Case (Var z) (Lambda v1 case1) (Lambda v2 case2))) sume
+
+
 --
 f : Term
 f = TLambda "a" (TLambda "b" (TArith Add (TVar "a") (TVar "b")))
@@ -322,6 +385,11 @@ prg3 = TArith Add (TConst 1) (TConst 2)
 prg3_il : il_expr
 prg3_il = runPure $ compile_lazy Stop prg3
 
+prg4_il : il_expr
+prg4_il = Case (Righta (Const 2)) 
+            (Lambda "x" (Arith Add (Var "x") (Const 5)))
+            (Lambda "y" (Arith Mul (Var "y") (Const 5)))
+
 typeCheckIL : il_expr -> List String
 typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
                   Left err => [err]
@@ -331,10 +399,18 @@ typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e
 prg2_types : List String
 prg2_types = typeCheckIL prg2_il
 
+prg5 : Term
+prg5 = TCase (TRight $ TConst 7) 
+             (TLambda "l" (TArith Add (TVar "l") (TConst 10))) 
+             (TLambda "r" (TArith Mul (TVar "r") (TConst 11)))
+
+prg5_il : il_expr
+prg5_il = runPure $ compile_lazy Stop prg5
+
 --
 
 rootSharp : String -> String -> String
-rootSharp exp resTy = unwords $ intersperse "\n" ["\nThunk fmain = " ++ exp ++ ";",
+rootSharp exp resTy = unwords $ intersperse "\n" ["Thunk fmain = " ++ exp ++ ";",
             "try",
             "{", 
                "while(true) {",
@@ -361,4 +437,4 @@ mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
                 in runPure res
 
 main : IO ()
-main = putStrLn $ mkSharp prg_il
+main = putStrLn $ mkSharp prg5_il

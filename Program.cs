@@ -40,16 +40,47 @@ namespace mangolian
             return f(x);
         }
 
+        class Sum<A, B>
+        {
+        }
+
+        class Left<A, B> : Sum<A, B>
+        {
+            public A a;
+            public Left(A x) { a = x; }
+        }
+        class Right<A, B> : Sum<A, B>
+        {
+            public B b;
+            public Right(B x) { b = x; }
+        }
+
+        static Sum<A, B> left<A, B>(A a)
+        {
+            return new Left<A,B>(a);
+        }
+        static Sum<A, B> right<A, B>(B b)
+        {
+            return new Right<A, B>(b);
+        }
+
+        static Thunk match<A, B>(Sum<A, B> e, Kont<A> fa, Kont<B> fb)
+        {
+            var l = e as Left<A, B>;
+            if (l != null) return () => run<A>(fa, l.a);
+            var r = e as Right<A, B>;
+            if (r != null) return () => run<B>(fb, r.b);
+            throw new Exception("bad Sum value");
+        }
+
         static void Main(string[] args)
         {
 
-            Thunk fmain = () => run<Kont<Pair<Kont<Kont<int>>, Kont<Kont<Pair<Kont<Kont<int>>, 
-                Kont<int>>>>>>>(x2 => () => run<Pair<Kont<Kont<int>>, Kont<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>>>
-                    (x2, pair<Kont<Kont<int>>, Kont<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>>(k3 => () => run<int>(k3, 5), 
-                    x0 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x0, pair<Kont<Kont<int>>, Kont<int>>
-                        (k1 => () => run<int>(k1, 3), x => { throw new Res<int>(x); })))), w4 => () => 
-                            run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(w4.snd, w5 => () => run<Kont<int>>(w4.fst, 
-                                a6 => () => run<Kont<int>>(w5.fst, b7 => () => run<int>(w5.snd, (a6 + b7))))));
+            Thunk fmain = () => run<Sum<Kont<Kont<int>>, Kont<Kont<int>>>>(z0 => match<Kont<Kont<int>>, 
+                Kont<Kont<int>>>(z0, l => () => run<Kont<int>>(l, a1 => () => run<int>(b2 => () => run<int>
+                    (x => { throw new Res<int>(x); }, (a1 + b2)), 10)), r => () => run<Kont<int>>(r, a3 => 
+                        () => run<int>(b4 => () => run<int>(x => { throw new Res<int>(x); }, (a3 * b4)), 11))), 
+                        right<Kont<Kont<int>>, Kont<Kont<int>>>(k5 => () => run<int>(k5, 7)));
             try
             {
                 while (true)
