@@ -87,7 +87,7 @@ namespace mangolian
 
         static void Main(string[] args)
         {
-            Thunk fmain = () => run<int>(a1 => () => run<int>(b2 => () => run<Sum<Unit, Unit>>(z0 => match<Unit, Unit>(z0, l => () => run<int>(x => { throw new Res<int>(x); }, 0), r => () => run<int>(x => { throw new Res<int>(x); }, 1)), less(a1, b2)), 7), 40);
+            Thunk fmain = () => run<int>(a3 => () => run<int>(b4 => () => run<Sum<Unit, Unit>>(z2 => match<Unit, Unit>(z2, u0 => () => run<int>(x => { throw new Res<int>(x); }, 20), u1 => () => run<int>(x => { throw new Res<int>(x); }, 1)), less(a3, b4)), 70), 82);
             try
             {
                 while (true)
@@ -99,7 +99,7 @@ namespace mangolian
             {
                 Console.WriteLine("result: {0}", r.res);
             }
-         
+
         }//main
     }
 }

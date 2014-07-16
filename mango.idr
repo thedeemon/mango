@@ -327,7 +327,15 @@ genSharp ctx (Case e e1 e2) =
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
              | TLeft Term | TRight Term | TCase Term Term Term
+             | TIf Term Term Term
 
+infixr 7 =@
+(=@) : Term -> Term -> Term
+a =@ b = TArith Eql a b
+
+infixr 7 <@
+(<@) : Term -> Term -> Term
+a <@ b = TArith Less a b
 
 mkvar : String -> { [STATE Int] } Eff id String
 mkvar v = do n <- get
@@ -373,6 +381,8 @@ mutual
     case1 <- compile_lazy k e1
     case2 <- compile_lazy k e2
     compile_lazy (Lambda z (Case (Var z) (Lambda v1 case1) (Lambda v2 case2))) sume
+  compile_lazy k (TIf cond th el) = 
+    compile_lazy k (TCase cond (TLambda !(mkvar "u") el) (TLambda !(mkvar "u") th))
 
 
 --
@@ -417,9 +427,9 @@ prg2_types : List String
 prg2_types = typeCheckIL prg2_il
 
 prg5 : Term
-prg5 = TCase (TArith Less (TConst 40) (TConst 7)) 
-             (TLambda "l" (TConst 0)) 
-             (TLambda "r" (TConst 1))
+prg5 = TIf ((TConst 12) <@ (TConst 70)) 
+             (TConst 1) 
+             (TConst 20)
 
 prg5_il : il_expr
 prg5_il = runPure $ compile_lazy Stop prg5
