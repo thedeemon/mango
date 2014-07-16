@@ -67,9 +67,9 @@ namespace mangolian
         static Thunk match<A, B>(Sum<A, B> e, Kont<A> fa, Kont<B> fb)
         {
             var l = e as Left<A, B>;
-            if (l != null) return () => run<A>(fa, l.a);
+            if (l != null) return () => fa(l.a);
             var r = e as Right<A, B>;
-            if (r != null) return () => run<B>(fb, r.b);
+            if (r != null) return () => fb(r.b);
             throw new Exception("bad Sum value");
         }
 
