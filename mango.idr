@@ -145,7 +145,7 @@ instance Show ILType where
 Ctx : Type
 Ctx = SortedMap il_expr ILType
 
-freshTyVar : { [STATE Int] } Eff m ILType
+freshTyVar : { [STATE Int] } Eff ILType
 freshTyVar = do vn <- get
                 put (vn + 1)
                 pure $ ITypeVar vn
@@ -175,7 +175,7 @@ opResTy Eql = ISum IUnit IUnit
 opResTy Less = ISum IUnit IUnit
 
 
-infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff m (ILType, Ctx)
+infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff (ILType, Ctx)
 infer_ilt ctx expr = 
   case expr of
     Unit => pure (IUnit, ctx)
@@ -269,7 +269,7 @@ tySharp IFalse = " Err: 0 type "
 tySharp (ITypeVar n) = " Err: unresolved type var t" ++ show n
 tySharp (ISum a b) = "Sum<" ++ tySharp a ++ ", " ++ tySharp b ++ ">"
 
-addDef : ILType -> String -> {[STATE (List String)]} Eff m String
+addDef : ILType -> String -> {[STATE (List String)]} Eff String
 addDef ty s = do xs <- get
                  let f = "f" ++ show (length xs) 
                  put $ (tySharp ty ++ " " ++ f ++ " = " ++ s ++ ";") :: xs
@@ -282,7 +282,7 @@ argTy : ILType -> String
 argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
-genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff m String
+genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
 genSharp ctx (Var v) = pure v
@@ -337,18 +337,18 @@ infixr 7 <@
 (<@) : Term -> Term -> Term
 a <@ b = TArith Less a b
 
-mkvar : String -> { [STATE Int] } Eff id String
+mkvar : String -> { [STATE Int] } Eff String
 mkvar v = do n <- get
              put (n+1)
              return $ v ++ show n
 
 mutual
-  lz : Term -> { [STATE Int] } Eff id il_expr
+  lz : Term -> { [STATE Int] } Eff il_expr
   lz e = do
     k <- mkvar "k"
     return $ Lambda k !(compile_lazy (Var k) e)
 
-  compile_lazy : il_expr -> Term -> { [STATE Int] } Eff id il_expr
+  compile_lazy : il_expr -> Term -> { [STATE Int] } Eff il_expr
   compile_lazy k (TVar name) = pure $ RunCont (Var name) k
   compile_lazy k (TConst n) = pure $ RunCont k (Const n)
   compile_lazy k TUnit = pure $ RunCont k Unit
