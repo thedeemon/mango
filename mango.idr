@@ -85,7 +85,6 @@ doArith Eql (VInt a) (VInt b) = Right $ if a == b then VRight VUnit else VLeft V
 doArith Less (VInt a) (VInt b) = Right $ if a < b then VRight VUnit else VLeft VUnit
 doArith _ _ _ = Left "bad args in Arith"
 
-
 eval_il : Env -> il_expr -> RtVal 
 eval_il env (Var v) = getv env v
 eval_il env (Const n) = return $ VInt n 
@@ -103,6 +102,8 @@ eval_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
   case !(eval_il env e) of
     VLeft v  => eval_il ((x1, v)::env) e1
     VRight v => eval_il ((x2, v)::env) e2
+    _ => Left "Not a sum type value in Case"
+eval_il env (Case _ _ _) = Left "Err: Case with not Lambdas"    
 
 run_il : Env -> il_expr -> RtVal
 run_il env (RunCont ef ex) = do
@@ -130,6 +131,10 @@ subst var sub ex =
     Lambda v e => if var == v then ex else Lambda v (subst var sub e)
     RunCont e1 e2 => RunCont (subst var sub e1) (subst var sub e2)
     Arith op e1 e2 => Arith op (subst var sub e1) (subst var sub e2)
+    Lefta e => Lefta $ subst var sub e
+    Righta e => Righta $ subst var sub e
+    Case a b c => Case (subst var sub a) (subst var sub b) (subst var sub c)
+
                         
 data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse | ISum ILType ILType
 
@@ -168,12 +173,12 @@ unify ctx IFalse IFalse = Right ctx
 unify ctx (ISum a1 a2) (ISum b1 b2) = unify !(unify ctx a1 b1) a2 b2
 unify ctx t1 t2 = Left $ "cannot unify " ++ show t1 ++ " and " ++ show t2
 
+total
 opResTy : Op -> ILType
 opResTy Add = IInt
 opResTy Mul = IInt
 opResTy Eql = ISum IUnit IUnit
 opResTy Less = ISum IUnit IUnit
-
 
 infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff (ILType, Ctx)
 infer_ilt ctx expr = 
@@ -260,6 +265,7 @@ infer_ilt ctx expr =
 showCtx : Ctx -> String
 showCtx ctx = show $ Data.SortedMap.toList ctx
 
+total
 tySharp : ILType -> String
 tySharp IInt = "int"
 tySharp IUnit = "Unit"
@@ -282,6 +288,7 @@ argTy : ILType -> String
 argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
+total
 genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
