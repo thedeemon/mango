@@ -12,6 +12,7 @@ name = String
 
 data il_expr = Var name | Const Int | Unit | Stop
              | Lambda name il_expr | RunCont il_expr il_expr -- e1 e2
+             | RecLambda name name il_expr -- rec f x e
              | Pair il_expr il_expr | Fst il_expr | Snd il_expr              
              | Arith Op il_expr il_expr            
              | Lefta il_expr | Righta il_expr | Case il_expr il_expr il_expr
@@ -36,6 +37,7 @@ instance Eq il_expr where
   Unit == Unit = True
   (Pair a b) == (Pair c d) = a == c && b == d
   (Lambda a b) == (Lambda c d) = a == c && b == d
+  (RecLambda f a b) == (RecLambda g c d) = a == c && b == d && f == g
   (Fst a) == (Fst b) = a == b
   (Snd a) == (Snd b) = a == b
   (RunCont a b) == (RunCont c d) = a == c && b == d
@@ -51,6 +53,7 @@ instance Show il_expr where
   show Unit = "Unit"
   show (Pair a b) = "(" ++ show a ++ ", " ++ show b ++ ")"
   show (Lambda v e) = "\\" ++ v ++ " . " ++ show e
+  show (RecLambda f v e) = "\\" ++ f ++ "(" ++ v ++ ") . " ++ show e
   show (Fst e) = "fst " ++ show e
   show (Snd e) = "snd " ++ show e
   show (RunCont a b) = "[" ++ show a ++ " <| " ++ show b ++ "]"
@@ -93,6 +96,7 @@ eval_il env (Pair e1 e2) =  [| VPair (eval_il env e1) (eval_il env e2) |]
 eval_il env (Fst e) = map (\(VPair a b) => a) $ eval_il env e
 eval_il env (Snd e) = map (\(VPair a b) => b) $ eval_il env e 
 eval_il env (Lambda v e) = return $ VCont v e env
+eval_il env (RecLambda f v e) = return k where k = VCont v e ((f,k)::env)
 eval_il env (RunCont ef ex) = Left "trying to eval runcont"
 eval_il env (Arith op e1 e2) = doArith op !(eval_il env e1) !(eval_il env e2) 
 eval_il env Stop = return VStop
@@ -129,6 +133,7 @@ subst var sub ex =
     Snd e => Snd $ subst var sub e
     Var name => if name == var then sub else ex
     Lambda v e => if var == v then ex else Lambda v (subst var sub e)
+    RecLambda f v e => if var == v then ex else RecLambda f v (subst var sub e)
     RunCont e1 e2 => RunCont (subst var sub e1) (subst var sub e2)
     Arith op e1 e2 => Arith op (subst var sub e1) (subst var sub e2)
     Lefta e => Lefta $ subst var sub e
@@ -204,6 +209,15 @@ infer_ilt ctx expr =
       case unify ctx3 t1 (INot t2) of
         Left err => raise err
         Right ctx4 => pure (IFalse, ctx4)
+    RecLambda f v exp => do
+      -- exp may have Var f
+      (_, ctx1) <- infer_ilt ctx exp
+      (tv, ctx2) <- infer_ilt ctx1 (Var v)
+      (tf, ctx3) <- infer_ilt ctx2 (Var f)
+      let ty = INot tv
+      case unify ctx3 ty tf of
+        Left err => raise err
+        Right ctx4 => pure (ty, insert expr ty ctx4)
     Pair e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
@@ -288,7 +302,7 @@ argTy : ILType -> String
 argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
-total
+--total
 genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
