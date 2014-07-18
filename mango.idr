@@ -167,16 +167,23 @@ tysub v sub (INot t) = INot (tysub v sub t)
 tysub v sub (ISum t1 t2) = ISum (tysub v sub t1) (tysub v sub t2)
 tysub v sub t = t
 
-unify : Ctx -> ILType -> ILType -> Either String Ctx
-unify ctx (ITypeVar v) t2 = Right $ map (tysub v t2) ctx
-unify ctx t1 (ITypeVar v) = Right $ map (tysub v t1) ctx
-unify ctx (INot t1) (INot t2) = unify ctx t1 t2
-unify ctx (IPair a1 a2) (IPair b1 b2) = unify !(unify ctx a1 b1) a2 b2
-unify ctx IInt IInt = Right ctx
-unify ctx IUnit IUnit = Right ctx
-unify ctx IFalse IFalse = Right ctx
-unify ctx (ISum a1 a2) (ISum b1 b2) = unify !(unify ctx a1 b1) a2 b2
-unify ctx t1 t2 = Left $ "cannot unify " ++ show t1 ++ " and " ++ show t2
+unify : Ctx -> ILType -> ILType -> {[EXCEPTION String]} Eff (ILType, Ctx) -- => proper type, updated context
+unify ctx (ITypeVar v) t2 = pure (t2, map (tysub v t2) ctx)
+unify ctx t1 (ITypeVar v) = pure (t1, map (tysub v t1) ctx)
+unify ctx (INot t1) (INot t2) = do (ty,cx) <- unify ctx t1 t2
+                                   pure (INot ty, cx)
+unify ctx (IPair a1 a2) (IPair b1 b2) = do
+  (t1,ctx1) <- unify ctx a1 b1
+  (t2,ctx2) <- unify ctx1 a2 b2
+  pure (IPair t1 t2, ctx2)
+unify ctx IInt IInt = pure (IInt, ctx)
+unify ctx IUnit IUnit = pure (IUnit, ctx)
+unify ctx IFalse IFalse = pure (IFalse, ctx)
+unify ctx (ISum a1 a2) (ISum b1 b2) = do
+  (t1,ctx1) <- unify ctx a1 b1
+  (t2,ctx2) <- unify ctx1 a2 b2
+  pure (ISum t1 t2, ctx2)
+unify ctx t1 t2 = raise $ "cannot unify " ++ show t1 ++ " and " ++ show t2
 
 total
 opResTy : Op -> ILType
@@ -206,18 +213,15 @@ infer_ilt ctx expr =
     RunCont e1 e2 => do
       (t2, ctx2) <- infer_ilt ctx e2
       (t1, ctx3) <- infer_ilt ctx2 e1
-      case unify ctx3 t1 (INot t2) of
-        Left err => raise err
-        Right ctx4 => pure (IFalse, ctx4)
+      (ty, ctx4) <- unify ctx3 t1 (INot t2) 
+      pure (IFalse, ctx4)
     RecLambda f v exp => do
       -- exp may have Var f
       (_, ctx1) <- infer_ilt ctx exp
       (tv, ctx2) <- infer_ilt ctx1 (Var v)
       (tf, ctx3) <- infer_ilt ctx2 (Var f)
-      let ty = INot tv
-      case unify ctx3 ty tf of
-        Left err => raise err
-        Right ctx4 => pure (ty, insert expr ty ctx4)
+      (t, ctx4) <- unify ctx3 (INot tv) tf 
+      pure (t, insert expr t ctx4)
     Pair e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
@@ -225,35 +229,33 @@ infer_ilt ctx expr =
       let ctx3 = insert expr ty ctx2
       pure (ty, ctx3)
     Fst e => do
-      (t, ctx1) <- infer_ilt ctx e
-      case t of 
+      (te, ctx1) <- infer_ilt ctx e
+      case te of 
         IPair t1 t2 => pure (t1, insert expr t1 ctx1)
         ITypeVar v => do
           t1 <- freshTyVar
           t2 <- freshTyVar
-          let ty = IPair t1 t2
-          case unify ctx1 t ty of
-               Left err => raise err
-               Right ctx2 => pure (t1, insert expr t1 ctx2)
-        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
+          let tp = IPair t1 t2
+          (tp1, ctx2) <- unify ctx1 te tp 
+          pure (t1, insert expr t1 ctx2)
+        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show te
     Snd e => do
-      (t, ctx1) <- infer_ilt ctx e
-      case t of 
+      (te, ctx1) <- infer_ilt ctx e
+      case te of 
         IPair t1 t2 => pure (t2, insert expr t2 ctx1)
         ITypeVar v => do
           t1 <- freshTyVar
           t2 <- freshTyVar
-          let ty = IPair t1 t2
-          case unify ctx1 t ty of
-               Left err => raise err
-               Right ctx2 => pure (t2, insert expr t2 ctx2)
-        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show t
+          let tp = IPair t1 t2
+          (tp1, ctx2) <- unify ctx1 te tp 
+          pure (t2, insert expr t2 ctx2)
+        _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show te
     Arith op e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
-      case (do unify !(unify ctx2 t1 IInt) t2 IInt) of 
-        Left err => raise err
-        Right ctx4 => pure (opResTy op, ctx4)
+      (_, ctx3) <- unify ctx2 t1 IInt
+      (_, ctx4) <- unify ctx3 t2 IInt
+      pure (opResTy op, ctx4)
     Lefta e => do
       (t, ctx1) <- infer_ilt ctx e
       t2 <- freshTyVar
@@ -269,10 +271,9 @@ infer_ilt ctx expr =
       (t1, ctx1) <- infer_ilt ctx0 e1
       (t2, ctx2) <- infer_ilt ctx1 e2
       case (t1, t2) of
-        (INot ty1, INot ty2) =>  
-          case unify ctx2 t0 (ISum ty1 ty2) of
-            Left err => raise err
-            Right ctx3 => pure (IFalse, ctx3)
+        (INot ty1, INot ty2) => do 
+          (ts, ctx3) <- unify ctx2 t0 (ISum ty1 ty2) 
+          pure (IFalse, ctx3)
         _ => raise "Not lambda types found in case"
 
                      
