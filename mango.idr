@@ -215,8 +215,7 @@ infer_ilt ctx expr =
       (t1, ctx3) <- infer_ilt ctx2 e1
       (ty, ctx4) <- unify ctx3 t1 (INot t2) 
       pure (IFalse, ctx4)
-    RecLambda f v exp => do
-      -- exp may have Var f
+    RecLambda f v exp => do -- exp may have Var f
       (_, ctx1) <- infer_ilt ctx exp
       (tv, ctx2) <- infer_ilt ctx1 (Var v)
       (tf, ctx3) <- infer_ilt ctx2 (Var f)
@@ -350,6 +349,7 @@ data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Ter
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
              | TLeft Term | TRight Term | TCase Term Term Term
              | TIf Term Term Term
+             | TRecLambda name name Term
 
 infixr 7 =@
 (=@) : Term -> Term -> Term
@@ -378,6 +378,12 @@ mutual
     w <- mkvar "w"
     exp <- compile_lazy (Snd (Var w)) expr 
     return $ RunCont k (Lambda w (subst arg (Fst(Var w)) exp))
+  compile_lazy k (TRecLambda f arg expr) = do
+    w <- mkvar "w"
+    r <- mkvar "rec"
+    exp <- compile_lazy (Snd (Var w)) expr 
+    let exp2 = subst f (Var r) $ subst arg (Fst(Var w)) exp
+    return $ RunCont k (RecLambda r w exp2)
   compile_lazy k (TApply e1 e2) = do
     x <- mkvar "x" 
     compile_lazy (Lambda x (RunCont (Var x) (Pair !(lz e2) k))) e1
@@ -456,6 +462,25 @@ prg5 = TIf ((TConst 12) <@ (TConst 70))
 prg5_il : il_expr
 prg5_il = runPure $ compile_lazy Stop prg5
 
+frec : Term
+frec = TRecLambda "f" "x" $ TIf ((TVar "x") <@ (TConst 50)) 
+                                (TApply (TVar "f") (TArith Add (TVar "x") (TConst 10)))
+                                (TVar "x")
+
+prg6 : Term
+prg6 = TApply frec (TConst 43)
+
+prg6_il : il_expr
+prg6_il = runPure $ compile_lazy Stop prg6
+
+prg7_il : il_expr
+prg7_il = RunCont f (Const 4) where
+  f : il_expr
+  f = RecLambda "f" "x" $
+        Case (Arith Less (Var "x") (Const 100))
+          (Lambda "b" (Var "x"))
+          (Lambda "a" (RunCont (Var "f") (Arith Add (Var "x") (Const 30))))
+
 --
 
 rootSharp : String -> String -> String
@@ -489,5 +514,6 @@ phi : Either String String -> String
 phi (Left s) = s
 phi (Right s) = s
 
-main : IO ()
-main = putStrLn $ phi $ mkSharp prg5_il
+--main : IO ()
+--main = putStrLn $ phi $ mkSharp prg5_il
+--main = print $ run_il [] prg6_il
