@@ -1,6 +1,8 @@
 module Main
+import Control.IOExcept
 import Effect.State
 import Effect.Exception
+import Effect.StdIO
 import Data.SortedMap
 
 data Op = Add | Mul | Eql | Less
@@ -73,31 +75,46 @@ mutual
   Env : Type
   Env = List (name, rt_val)
 
+instance Show rt_val where
+  show (VInt n) = show n
+  show VUnit = "()"
+  show (VPair a b) = "(" ++ show a ++ ", " ++ show b ++ ")"
+  show (VCont x e env) = "(\\" ++ x ++ " => ...)" 
+  show VStop = "Stop"
+  show (VLeft v) = "Left " ++ show v
+  show (VRight v) = "Right " ++ show v
+
 RtVal : Type
-RtVal = Either String rt_val 
+RtVal = {[STDIO, EXCEPTION String]} Eff rt_val 
 
 getv : Env -> name -> RtVal
 getv env var with (lookup var env)
-  | Just v = Right v
-  | Nothing = Left $ "unknown var " ++ var
+  | Just v = pure v
+  | Nothing = raise $ "unknown var " ++ var
 
 doArith : Op -> rt_val -> rt_val -> RtVal
-doArith Add (VInt a) (VInt b) = Right $ VInt (a + b)
-doArith Mul (VInt a) (VInt b) = Right $ VInt (a * b)
-doArith Eql (VInt a) (VInt b) = Right $ if a == b then VRight VUnit else VLeft VUnit
-doArith Less (VInt a) (VInt b) = Right $ if a < b then VRight VUnit else VLeft VUnit
-doArith _ _ _ = Left "bad args in Arith"
+doArith Add (VInt a) (VInt b) = pure $ VInt (a + b)
+doArith Mul (VInt a) (VInt b) = pure $ VInt (a * b)
+doArith Eql (VInt a) (VInt b) = pure $ if a == b then VRight VUnit else VLeft VUnit
+doArith Less (VInt a) (VInt b) = pure $ if a < b then VRight VUnit else VLeft VUnit
+doArith _ _ _ = raise "bad args in Arith"
 
 eval_il : Env -> il_expr -> RtVal 
 eval_il env (Var v) = getv env v
 eval_il env (Const n) = return $ VInt n 
 eval_il env Unit = return VUnit
 eval_il env (Pair e1 e2) =  [| VPair (eval_il env e1) (eval_il env e2) |]
-eval_il env (Fst e) = map (\(VPair a b) => a) $ eval_il env e
-eval_il env (Snd e) = map (\(VPair a b) => b) $ eval_il env e 
+eval_il env (Fst e) = do
+  case !(eval_il env e) of
+    VPair a b => return a
+    _ => raise "not a pair in Fst"
+eval_il env (Snd e) = do
+  case !(eval_il env e) of
+    VPair a b => return b
+    _ => raise "not a pair in Snd"
 eval_il env (Lambda v e) = return $ VCont v e env
 eval_il env (RecLambda f v e) = return k where k = VCont v e ((f,k)::env)
-eval_il env (RunCont ef ex) = Left "trying to eval runcont"
+eval_il env (RunCont ef ex) = raise "trying to eval runcont"
 eval_il env (Arith op e1 e2) = doArith op !(eval_il env e1) !(eval_il env e2) 
 eval_il env Stop = return VStop
 eval_il env (Lefta e) = pure $ VLeft !(eval_il env e)
@@ -106,21 +123,24 @@ eval_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
   case !(eval_il env e) of
     VLeft v  => eval_il ((x1, v)::env) e1
     VRight v => eval_il ((x2, v)::env) e2
-    _ => Left "Not a sum type value in Case"
-eval_il env (Case _ _ _) = Left "Err: Case with not Lambdas"    
+    _ => raise "Not a sum type value in Case"
+eval_il env (Case _ _ _) = raise "Err: Case with not Lambdas"    
 
 run_il : Env -> il_expr -> RtVal
 run_il env (RunCont ef ex) = do
   vf <- eval_il env ef
   vx <- eval_il env ex
   case vf of
-    VCont n e env0 => run_il ((n,vx)::env0) e
+    VCont n e env0 => do
+      putStrLn $ "run " ++ n ++ "=" ++ show vx
+      run_il ((n,vx)::env0) e
     VStop => return vx
-    _ => Left "bad fun_expr in RunCont"
+    _ => raise "bad fun_expr in RunCont"
 run_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
   case !(eval_il env e) of
     VLeft v  => run_il ((x1, v)::env) e1
     VRight v => run_il ((x2, v)::env) e2
+    _ => raise "run_il: not a sum in case"
 run_il env e = eval_il env e
 
 subst : name -> il_expr -> il_expr -> il_expr
@@ -451,9 +471,6 @@ typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e
                   Right (t, ctx) => map show $ Data.SortedMap.toList ctx
 
 
-prg2_types : List String
-prg2_types = typeCheckIL prg2_il
-
 prg5 : Term
 prg5 = TIf ((TConst 12) <@ (TConst 70)) 
              (TConst 1) 
@@ -467,8 +484,11 @@ frec = TRecLambda "f" "x" $ TIf ((TVar "x") <@ (TConst 50))
                                 (TApply (TVar "f") (TArith Add (TVar "x") (TConst 10)))
                                 (TVar "x")
 
+frec2 : Term
+frec2 = TRecLambda "f" "x" $ TApply (TVar "f") (TConst 99)
+
 prg6 : Term
-prg6 = TApply frec (TConst 43)
+prg6 = TApply frec2 (TConst 44)
 
 prg6_il : il_expr
 prg6_il = runPure $ compile_lazy Stop prg6
@@ -514,6 +534,8 @@ phi : Either String String -> String
 phi (Left s) = s
 phi (Right s) = s
 
---main : IO ()
+main : IO ()
+main = do r <- the (IO rt_val) $ run $ run_il [] prg7_il
+          putStrLn $ show r
 --main = putStrLn $ phi $ mkSharp prg5_il
 --main = print $ run_il [] prg6_il
