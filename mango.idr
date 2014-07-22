@@ -501,6 +501,14 @@ prg7_il = RunCont f (Const 4) where
           (Lambda "b" (Var "x"))
           (Lambda "a" (RunCont (Var "f") (Arith Add (Var "x") (Const 30))))
 
+fid : Term
+fid = TLambda "x" (TVar "x")
+
+prg8 : Term
+prg8 = TApply (TLambda "f" (TApply (TVar "f") (TConst 22))) fid
+
+prg8_il : il_expr
+prg8_il = runPure $ compile_lazy Stop prg8
 --
 
 rootSharp : String -> String -> String
