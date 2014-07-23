@@ -509,6 +509,15 @@ prg8 = TApply (TLambda "f" (TApply (TVar "f") (TConst 22))) fid
 
 prg8_il : il_expr
 prg8_il = runPure $ compile_lazy Stop prg8
+
+
+prg9 : Term
+prg9 = TApply (TVar "f") (TConst 22)
+
+
+prg9_il : il_expr
+prg9_il = runPure $ compile_lazy Stop prg9
+
 --
 
 rootSharp : String -> String -> String
