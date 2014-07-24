@@ -86,19 +86,22 @@ instance Show rt_val where
   show (VRight v) = "Right " ++ show v
 
 RtVal : Type
-RtVal = {[EXCEPTION String]} Eff rt_val 
+RtVal = Either String rt_val 
+
+raise_ : String -> RtVal
+raise_ s = Left s 
 
 getv : Env -> name -> RtVal
 getv env var with (lookup var env)
   | Just v = pure v
-  | Nothing = raise $ "unknown var " ++ var
+  | Nothing = raise_ $ "unknown var " ++ var
 
 doArith : Op -> rt_val -> rt_val -> RtVal
 doArith Add (VInt a) (VInt b) = pure $ VInt (a + b)
 doArith Mul (VInt a) (VInt b) = pure $ VInt (a * b)
 doArith Eql (VInt a) (VInt b) = pure $ if a == b then VRight VUnit else VLeft VUnit
 doArith Less (VInt a) (VInt b) = pure $ if a < b then VRight VUnit else VLeft VUnit
-doArith _ _ _ = raise "bad args in Arith"
+doArith _ _ _ = raise_ "bad args in Arith"
 
 eval_il : Env -> il_expr -> RtVal 
 eval_il env (Var v) = getv env v
@@ -108,14 +111,14 @@ eval_il env (Pair e1 e2) =  [| VPair (eval_il env e1) (eval_il env e2) |]
 eval_il env (Fst e) = do
   case !(eval_il env e) of
     VPair a b => return a
-    _ => raise "not a pair in Fst"
+    _ => raise_ "not a pair in Fst"
 eval_il env (Snd e) = do
   case !(eval_il env e) of
     VPair a b => return b
-    _ => raise "not a pair in Snd"
+    _ => raise_ "not a pair in Snd"
 eval_il env (Lambda v e) = return $ VCont v e env
 eval_il env (RecLambda f v e) = return k where k = VCont v e ((f,k)::env)
-eval_il env (RunCont ef ex) = raise "trying to eval runcont"
+eval_il env (RunCont ef ex) = raise_ "trying to eval runcont"
 eval_il env (Arith op e1 e2) = doArith op !(eval_il env e1) !(eval_il env e2) 
 eval_il env Stop = return VStop
 eval_il env (Lefta e) = pure $ VLeft !(eval_il env e)
@@ -124,23 +127,24 @@ eval_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
   case !(eval_il env e) of
     VLeft v  => eval_il ((x1, v)::env) e1
     VRight v => eval_il ((x2, v)::env) e2
-    _ => raise "Not a sum type value in Case"
-eval_il env (Case _ _ _) = raise "Err: Case with not Lambdas"    
+    _ => raise_ "Not a sum type value in Case"
+eval_il env (Case _ _ _) = raise_ "Err: Case with not Lambdas"    
 
 run_il : Env -> il_expr -> RtVal
 run_il env (RunCont ef ex) = do
   vf <- eval_il env ef
   vx <- eval_il env ex
   case vf of
-    VCont n e env0 => let recur = trace ("run " ++ n ++ "=" ++ show vx) (\qq => do run_il ((n,vx)::env0) e)   
-                      in recur () 
+    VCont n e env0 => run_il ((n,vx)::env0) e
+    --VCont n e env0 => let recur = trace ("run " ++ n ++ "=" ++ show vx) (\qq => do run_il ((n,vx)::env0) e)
+    --                  in recur () 
     VStop => return vx
-    _ => raise "bad fun_expr in RunCont"
+    _ => raise_ "bad fun_expr in RunCont"
 run_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
   case !(eval_il env e) of
     VLeft v  => run_il ((x1, v)::env) e1
     VRight v => run_il ((x2, v)::env) e2
-    _ => raise "run_il: not a sum in case"
+    _ => raise_ "run_il: not a sum in case"
 run_il env e = eval_il env e
 
 subst : name -> il_expr -> il_expr -> il_expr
@@ -513,7 +517,7 @@ frec2 : Term
 frec2 = TRecLambda "f" "x" $ TApply (TVar "f") (TConst 99)
 
 prg6 : Term
-prg6 = TApply frec (TConst 44)
+prg6 = TApply frec (TConst 2)
 
 prg6_il : il_expr
 prg6_il = runPure $ compile_lazy Stop prg6
@@ -577,8 +581,8 @@ phi (Left s) = s
 phi (Right s) = s
 
 main : IO ()
-main = do traverse_ putStrLn $ typeCheckIL prg8_il
-          let r = the (Either String rt_val) $ run $ run_il [] prg8_il
+main = do traverse_ putStrLn $ typeCheckIL prg7_il
+          let r = the (Either String rt_val) $ run_il [] prg7_il
           case r of
             Left err => putStrLn err
             Right v => print v
