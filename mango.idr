@@ -4,6 +4,7 @@ import Effect.State
 import Effect.Exception
 import Effect.StdIO
 import Data.SortedMap
+import Debug.Trace
 
 data Op = Add | Mul | Eql | Less
 var : Type
@@ -85,7 +86,7 @@ instance Show rt_val where
   show (VRight v) = "Right " ++ show v
 
 RtVal : Type
-RtVal = {[STDIO, EXCEPTION String]} Eff rt_val 
+RtVal = {[EXCEPTION String]} Eff rt_val 
 
 getv : Env -> name -> RtVal
 getv env var with (lookup var env)
@@ -131,9 +132,7 @@ run_il env (RunCont ef ex) = do
   vf <- eval_il env ef
   vx <- eval_il env ex
   case vf of
-    VCont n e env0 => do
-      putStrLn $ "run " ++ n ++ "=" ++ show vx
-      run_il ((n,vx)::env0) e
+    VCont n e env0 => trace ("run " ++ n ++ "=" ++ show vx) $ run_il ((n,vx)::env0) e
     VStop => return vx
     _ => raise "bad fun_expr in RunCont"
 run_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
@@ -180,6 +179,7 @@ freshTyVar = do vn <- get
                 put (vn + 1)
                 pure $ ITypeVar vn
 
+total
 tysub : Int -> ILType -> ILType -> ILType
 tysub v sub (ITypeVar n) = if n == v then sub else ITypeVar n
 tysub v sub (IPair t1 t2) = IPair (tysub v sub t1) (tysub v sub t2)
@@ -187,23 +187,41 @@ tysub v sub (INot t) = INot (tysub v sub t)
 tysub v sub (ISum t1 t2) = ISum (tysub v sub t1) (tysub v sub t2)
 tysub v sub t = t
 
-unify : Ctx -> ILType -> ILType -> {[EXCEPTION String]} Eff (ILType, Ctx) -- => proper type, updated context
-unify ctx (ITypeVar v) t2 = pure (t2, map (tysub v t2) ctx)
-unify ctx t1 (ITypeVar v) = pure (t1, map (tysub v t1) ctx)
-unify ctx (INot t1) (INot t2) = do (ty,cx) <- unify ctx t1 t2
-                                   pure (INot ty, cx)
-unify ctx (IPair a1 a2) (IPair b1 b2) = do
-  (t1,ctx1) <- unify ctx a1 b1
-  (t2,ctx2) <- unify ctx1 a2 b2
-  pure (IPair t1 t2, ctx2)
-unify ctx IInt IInt = pure (IInt, ctx)
-unify ctx IUnit IUnit = pure (IUnit, ctx)
-unify ctx IFalse IFalse = pure (IFalse, ctx)
-unify ctx (ISum a1 a2) (ISum b1 b2) = do
-  (t1,ctx1) <- unify ctx a1 b1
-  (t2,ctx2) <- unify ctx1 a2 b2
-  pure (ISum t1 t2, ctx2)
-unify ctx t1 t2 = raise $ "cannot unify " ++ show t1 ++ " and " ++ show t2
+total
+first2 : Vect (S (S n)) a -> (a,a)
+first2 v = (head v, head $ tail v)
+
+total tail2 : Vect (S (S n)) a -> Vect n a
+tail2 v = tail $ tail v
+
+   -- => updated (context, additinal passed types)
+unify : Ctx -> Vect n ILType -> ILType -> ILType -> {[EXCEPTION String]} Eff (Ctx, Vect n ILType)
+unify ctx ts (ITypeVar v) t2 = pure $ trace ("tysub t" ++ show v ++ " -> " ++ show t2) $ 
+                                 (map (tysub v t2) ctx, map (tysub v t2) ts)
+--unify ctx (ITypeVar v) t2 = pure $ map (tysub v t2) ctx
+--unify ctx t1 (ITypeVar v) = pure $ map (tysub v t1) ctx
+unify ctx ts t1 (ITypeVar v) = pure $ trace ("tysub t" ++ show v ++ " -> " ++ show t1) $ 
+                                (map (tysub v t1) ctx, map (tysub v t1) ts)
+unify ctx ts (INot t1) (INot t2) = unify ctx ts t1 t2
+unify ctx ts (IPair a1 a2) (IPair b1 b2) = do
+  (ctx1, ts') <- unify ctx (a2 :: b2 :: ts) a1 b1
+  let (a2', b2') = first2 ts'
+  unify ctx1 (tail2 ts') a2' b2'
+unify ctx ts IInt IInt = pure (ctx, ts)
+unify ctx ts IUnit IUnit = pure (ctx, ts)
+unify ctx ts IFalse IFalse = pure (ctx, ts)
+unify ctx ts (ISum a1 a2) (ISum b1 b2) = do
+  (ctx1, ts') <- unify ctx (a2 :: b2 :: ts) a1 b1
+  let (a2', b2') = first2 ts'
+  unify ctx1 (tail2 ts') a2' b2'
+unify ctx ts t1 t2 = raise $ "cannot unify " ++ show t1 ++ " and " ++ show t2
+
+unify_ : Ctx -> ILType -> ILType -> {[EXCEPTION String]} Eff Ctx 
+unify_ ctx t1 t2 = f () where
+    f : () -> {[EXCEPTION String]} Eff Ctx 
+    f = trace ("unify " ++ show t1 ++ " and " ++ show t2) (\x => do (cx,_) <- unify ctx [] t1 t2
+                                                                    pure cx  
+                                                          )
 
 total
 opResTy : Op -> ILType
@@ -211,6 +229,9 @@ opResTy Add = IInt
 opResTy Mul = IInt
 opResTy Eql = ISum IUnit IUnit
 opResTy Less = ISum IUnit IUnit
+
+defType : il_expr -> ILType -> Ctx -> Ctx
+defType expr ty ctx = trace ("def " ++ show expr ++ " : " ++ show ty) $ insert expr ty ctx
 
 infer_ilt : Ctx -> il_expr -> { [STATE Int, EXCEPTION String] } Eff (ILType, Ctx)
 infer_ilt ctx expr = 
@@ -222,7 +243,7 @@ infer_ilt ctx expr =
     Var v => case lookup expr ctx of
                Just t => pure (t, ctx)
                Nothing => do tvar <- freshTyVar
-                             let ctx' = insert expr tvar ctx
+                             let ctx' = defType expr tvar ctx
                              pure (tvar, ctx')
     Lambda v exp => do
       (_, ctx1) <- infer_ilt ctx exp
@@ -233,14 +254,16 @@ infer_ilt ctx expr =
     RunCont e1 e2 => do
       (t2, ctx2) <- infer_ilt ctx e2
       (t1, ctx3) <- infer_ilt ctx2 e1
-      (ty, ctx4) <- unify ctx3 t1 (INot t2) 
+      ctx4 <- unify_ ctx3 t1 (INot t2) ---
       pure (IFalse, ctx4)
     RecLambda f v exp => do -- exp may have Var f
       (_, ctx1) <- infer_ilt ctx exp
       (tv, ctx2) <- infer_ilt ctx1 (Var v)
       (tf, ctx3) <- infer_ilt ctx2 (Var f)
-      (t, ctx4) <- unify ctx3 (INot tv) tf 
-      pure (t, insert expr t ctx4)
+      ctx4 <- unify_ ctx3 (INot tv) tf ---
+      case lookup (Var f) ctx4 of
+        Just t => pure (t, insert expr t ctx4)
+        Nothing => raise "oops, Var f shoulda been in ctx4"
     Pair e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
@@ -255,7 +278,7 @@ infer_ilt ctx expr =
           t1 <- freshTyVar
           t2 <- freshTyVar
           let tp = IPair t1 t2
-          (tp1, ctx2) <- unify ctx1 te tp 
+          ctx2 <- unify_ ctx1 te tp  ---
           pure (t1, insert expr t1 ctx2)
         _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show te
     Snd e => do
@@ -266,14 +289,14 @@ infer_ilt ctx expr =
           t1 <- freshTyVar
           t2 <- freshTyVar
           let tp = IPair t1 t2
-          (tp1, ctx2) <- unify ctx1 te tp 
+          ctx2 <- unify_ ctx1 te tp   ---
           pure (t2, insert expr t2 ctx2)
         _ => raise $ "pair type expected for " ++ show e ++ ", instead found " ++ show te
     Arith op e1 e2 => do
       (t1, ctx1) <- infer_ilt ctx e1
       (t2, ctx2) <- infer_ilt ctx1 e2
-      (_, ctx3) <- unify ctx2 t1 IInt
-      (_, ctx4) <- unify ctx3 t2 IInt
+      ctx3 <- unify_ ctx2 t1 IInt   ---
+      ctx4 <- unify_ ctx3 t2 IInt   ---
       pure (opResTy op, ctx4)
     Lefta e => do
       (t, ctx1) <- infer_ilt ctx e
@@ -291,12 +314,12 @@ infer_ilt ctx expr =
       (t2, ctx2) <- infer_ilt ctx1 e2
       case (t1, t2) of
         (INot ty1, INot ty2) => do 
-          (ts, ctx3) <- unify ctx2 t0 (ISum ty1 ty2) 
+          ctx3 <- unify_ ctx2 t0 (ISum ty1 ty2)   ---
           pure (IFalse, ctx3)
         _ => raise "Not lambda types found in case"
 
                      
-showCtx : Ctx -> String
+total showCtx : Ctx -> String
 showCtx ctx = show $ Data.SortedMap.toList ctx
 
 total
@@ -318,7 +341,7 @@ addDef ty s = do xs <- get
 Ctx2 : Type
 Ctx2 = List (il_expr, ILType)
 
-argTy : ILType -> String
+total argTy : ILType -> String
 argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
@@ -434,7 +457,7 @@ mutual
 
 
 --
-f : Term
+{- f : Term
 f = TLambda "a" (TLambda "b" (TArith Add (TVar "a") (TVar "b")))
 
 v1 : Term
@@ -464,14 +487,14 @@ prg4_il : il_expr
 prg4_il = Case (Righta (Const 2)) 
             (Lambda "x" (Arith Add (Var "x") (Const 5)))
             (Lambda "y" (Arith Mul (Var "y") (Const 5)))
-
+            -}
 typeCheckIL : il_expr -> List String
 typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
                   Left err => [err]
                   Right (t, ctx) => map show $ Data.SortedMap.toList ctx
 
 
-prg5 : Term
+{- prg5 : Term
 prg5 = TIf ((TConst 12) <@ (TConst 70)) 
              (TConst 1) 
              (TConst 20)
@@ -492,7 +515,7 @@ prg6 = TApply frec2 (TConst 44)
 
 prg6_il : il_expr
 prg6_il = runPure $ compile_lazy Stop prg6
-
+-}
 prg7_il : il_expr
 prg7_il = RunCont f (Const 4) where
   f : il_expr
@@ -552,7 +575,12 @@ phi (Left s) = s
 phi (Right s) = s
 
 main : IO ()
-main = do r <- the (IO rt_val) $ run $ run_il [] prg7_il
-          putStrLn $ show r
+main = --traverse_ putStrLn $ typeCheckIL prg8_il
+
+       do let r = the (Either String rt_val) $ run $ run_il [] prg8_il
+          case r of
+            Left err => putStrLn err
+            Right v => print v
+
 --main = putStrLn $ phi $ mkSharp prg5_il
 --main = print $ run_il [] prg6_il
