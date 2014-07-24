@@ -132,7 +132,8 @@ run_il env (RunCont ef ex) = do
   vf <- eval_il env ef
   vx <- eval_il env ex
   case vf of
-    VCont n e env0 => trace ("run " ++ n ++ "=" ++ show vx) $ run_il ((n,vx)::env0) e
+    VCont n e env0 => let recur = trace ("run " ++ n ++ "=" ++ show vx) (\qq => do run_il ((n,vx)::env0) e)   
+                      in recur () 
     VStop => return vx
     _ => raise "bad fun_expr in RunCont"
 run_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
@@ -424,8 +425,9 @@ mutual
   compile_lazy k (TRecLambda f arg expr) = do
     w <- mkvar "w"
     r <- mkvar "rec"
+    u <- mkvar "u"
     exp <- compile_lazy (Snd (Var w)) expr 
-    let exp2 = subst f (Var r) $ subst arg (Fst(Var w)) exp
+    let exp2 = subst f (Lambda u (RunCont (Var u) (Var r))) $ subst arg (Fst(Var w)) exp
     return $ RunCont k (RecLambda r w exp2)
   compile_lazy k (TApply e1 e2) = do
     x <- mkvar "x" 
@@ -494,14 +496,14 @@ typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e
                   Right (t, ctx) => map show $ Data.SortedMap.toList ctx
 
 
-{- prg5 : Term
+{-prg5 : Term
 prg5 = TIf ((TConst 12) <@ (TConst 70)) 
              (TConst 1) 
              (TConst 20)
 
 prg5_il : il_expr
 prg5_il = runPure $ compile_lazy Stop prg5
-
+-}
 frec : Term
 frec = TRecLambda "f" "x" $ TIf ((TVar "x") <@ (TConst 50)) 
                                 (TApply (TVar "f") (TArith Add (TVar "x") (TConst 10)))
@@ -511,11 +513,11 @@ frec2 : Term
 frec2 = TRecLambda "f" "x" $ TApply (TVar "f") (TConst 99)
 
 prg6 : Term
-prg6 = TApply frec2 (TConst 44)
+prg6 = TApply frec (TConst 44)
 
 prg6_il : il_expr
 prg6_il = runPure $ compile_lazy Stop prg6
--}
+
 prg7_il : il_expr
 prg7_il = RunCont f (Const 4) where
   f : il_expr
@@ -575,9 +577,8 @@ phi (Left s) = s
 phi (Right s) = s
 
 main : IO ()
-main = --traverse_ putStrLn $ typeCheckIL prg8_il
-
-       do let r = the (Either String rt_val) $ run $ run_il [] prg8_il
+main = do traverse_ putStrLn $ typeCheckIL prg8_il
+          let r = the (Either String rt_val) $ run $ run_il [] prg8_il
           case r of
             Left err => putStrLn err
             Right v => print v
