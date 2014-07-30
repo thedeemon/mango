@@ -6,7 +6,7 @@ import Effect.StdIO
 import Data.SortedMap
 import Debug.Trace
 
-data Op = Add | Mul | Eql | Less
+data Op = Add | Sub | Mul | Eql | Less
 var : Type
 var = String
 
@@ -22,6 +22,7 @@ data il_expr = Var name | Const Int | Unit | Stop
 
 instance Eq Op where
   Add == Add = True
+  Sub == Sub = True
   Mul == Mul = True
   Eql == Eql = True
   Less == Less = True
@@ -29,6 +30,7 @@ instance Eq Op where
 
 instance Show Op where
   show Add = "+"
+  show Sub = "-"
   show Mul = "*"
   show Eql = "="
   show Less = "<"
@@ -98,6 +100,7 @@ getv env var with (lookup var env)
 
 doArith : Op -> rt_val -> rt_val -> RtVal
 doArith Add (VInt a) (VInt b) = pure $ VInt (a + b)
+doArith Sub (VInt a) (VInt b) = pure $ VInt (a - b)
 doArith Mul (VInt a) (VInt b) = pure $ VInt (a * b)
 doArith Eql (VInt a) (VInt b) = pure $ if a == b then VRight VUnit else VLeft VUnit
 doArith Less (VInt a) (VInt b) = pure $ if a < b then VRight VUnit else VLeft VUnit
@@ -231,6 +234,7 @@ unify_ ctx t1 t2 = f () where
 total
 opResTy : Op -> ILType
 opResTy Add = IInt
+opResTy Sub = IInt
 opResTy Mul = IInt
 opResTy Eql = ISum IUnit IUnit
 opResTy Less = ISum IUnit IUnit
@@ -351,7 +355,7 @@ argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
 --total
-genSharp : Ctx2 -> il_expr -> { [STATE (List String), EXCEPTION String] } Eff String
+genSharp : Ctx2 -> il_expr -> { [EXCEPTION String] } Eff String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
 genSharp ctx (Var v) = pure v
@@ -374,6 +378,13 @@ genSharp ctx (Lambda v e) = let exp = Lambda v e in
                             case lookup exp ctx of
                               Nothing =>  raise $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
                               Just ty => pure $ v ++ " => " ++ !(genSharp ctx e)
+genSharp ctx (RecLambda f v e) = 
+  let exp = RecLambda f v e in
+  case lookup exp ctx of
+    Nothing =>  raise $ "Err: unknown type for " ++ show exp ++ " ::: " ++ show ctx
+    Just (INot ty) => pure $ "unrec<" ++ tySharp ty ++ ">((" 
+                               ++ v ++ "," ++ f ++ ") => " ++ !(genSharp ctx e) ++ ")"
+    Just ty => raise $ "RecLambda type shoulda been INot x, instead got " ++ show ty
 genSharp ctx (RunCont f x) = 
   case lookup f ctx of
     Just (INot t) => pure $ "() => run<" ++ tySharp t ++">("++ !(genSharp ctx f) ++", "++ !(genSharp ctx x) ++")"
@@ -530,22 +541,18 @@ prg7_il = RunCont f (Const 4) where
           (Lambda "b" (Var "x"))
           (Lambda "a" (RunCont (Var "f") (Arith Add (Var "x") (Const 30))))
 
-fid : Term
-fid = TLambda "x" (TVar "x")
+fib : Term
+fib = TRecLambda "fib" "x" $ TIf ((TVar "x") <@ (TConst 3)) 
+                                   (TConst 1)
+                                   (TArith Add
+                                     (TApply (TVar "fib") (TArith Sub (TVar "x") (TConst 1)))
+                                     (TApply (TVar "fib") (TArith Sub (TVar "x") (TConst 2))))
 
 prg8 : Term
-prg8 = TApply (TLambda "f" (TApply (TVar "f") (TConst 22))) fid
+prg8 = TApply fib (TConst 8)
 
 prg8_il : il_expr
 prg8_il = runPure $ compile_lazy Stop prg8
-
-
-prg9 : Term
-prg9 = TApply (TVar "f") (TConst 22)
-
-
-prg9_il : il_expr
-prg9_il = runPure $ compile_lazy Stop prg9
 
 --
 
@@ -571,9 +578,8 @@ mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
               Left err => Left err
               Right (ty, ctx) => 
                 let res = do mainExp <- genSharp (Data.SortedMap.toList ctx) e
-                             defs <- get
                              let resTy = resultType ctx
-                             pure $ (unwords $ intersperse "\n" (reverse defs)) ++ rootSharp mainExp resTy
+                             pure $ rootSharp mainExp resTy
                 in the (Either String String) $ run res
 
 phi : Either String String -> String
@@ -581,11 +587,11 @@ phi (Left s) = s
 phi (Right s) = s
 
 main : IO ()
-main = do traverse_ putStrLn $ typeCheckIL prg7_il
+{-main = do traverse_ putStrLn $ typeCheckIL prg7_il
           let r = the (Either String rt_val) $ run_il [] prg7_il
           case r of
             Left err => putStrLn err
-            Right v => print v
+            Right v => print v-}
 
---main = putStrLn $ phi $ mkSharp prg5_il
+main = putStrLn $ phi $ mkSharp prg8_il
 --main = print $ run_il [] prg6_il
