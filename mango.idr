@@ -3,7 +3,7 @@ import Control.IOExcept
 import Effect.State
 import Effect.Exception
 import Effect.StdIO
-import Data.SortedMap
+import SortedMap
 import Debug.Trace
 
 data Op = Add | Sub | Mul | Eql | Less
@@ -182,6 +182,9 @@ instance Show ILType where
 Ctx : Type
 Ctx = SortedMap il_expr ILType
 
+instance Show Ctx where
+  show ctx = show $ SortedMap.toList ctx
+
 freshTyVar : { [STATE Int] } Eff ILType
 freshTyVar = do vn <- get
                 put (vn + 1)
@@ -329,7 +332,7 @@ infer_ilt ctx expr =
 
                      
 total showCtx : Ctx -> String
-showCtx ctx = show $ Data.SortedMap.toList ctx
+showCtx ctx = show $ SortedMap.toList ctx
 
 total
 tySharp : ILType -> String
@@ -355,7 +358,7 @@ argTy (INot t) = tySharp t
 argTy t = "Err: argTy for positive type " ++ show t
 
 --total
-genSharp : Ctx2 -> il_expr -> { [EXCEPTION String] } Eff String
+genSharp : Ctx -> il_expr -> { [EXCEPTION String] } Eff String
 genSharp ctx Unit = pure "unit"
 genSharp ctx (Const n) = pure $ show n
 genSharp ctx (Var v) = pure v
@@ -508,7 +511,7 @@ prg4_il = Case (Righta (Const 2))
 typeCheckIL : il_expr -> List String
 typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
                   Left err => [err]
-                  Right (t, ctx) => map show $ Data.SortedMap.toList ctx
+                  Right (t, ctx) => map show $ SortedMap.toList ctx
 
 
 {-prg5 : Term
@@ -577,7 +580,7 @@ mkSharp : il_expr -> Either String String
 mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
               Left err => Left err
               Right (ty, ctx) => 
-                let res = do mainExp <- genSharp (Data.SortedMap.toList ctx) e
+                let res = do mainExp <- genSharp ctx e
                              let resTy = resultType ctx
                              pure $ rootSharp mainExp resTy
                 in the (Either String String) $ run res
