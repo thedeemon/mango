@@ -6,7 +6,7 @@ import Effect.StdIO
 import SortedMap
 import Debug.Trace
 
-data Op = Add | Sub | Mul | Eql | Less
+data Op = Add | Sub | Mul | Eql | Less | Mod
 var : Type
 var = String
 
@@ -26,6 +26,7 @@ instance Eq Op where
   Mul == Mul = True
   Eql == Eql = True
   Less == Less = True
+  Mod == Mod = True
   _ == _ = False
 
 instance Show Op where
@@ -34,6 +35,7 @@ instance Show Op where
   show Mul = "*"
   show Eql = "="
   show Less = "<"
+  show Mod = "%"
 
 instance Eq il_expr where 
   Stop == Stop = True
@@ -102,6 +104,7 @@ doArith : Op -> rt_val -> rt_val -> RtVal
 doArith Add (VInt a) (VInt b) = pure $ VInt (a + b)
 doArith Sub (VInt a) (VInt b) = pure $ VInt (a - b)
 doArith Mul (VInt a) (VInt b) = pure $ VInt (a * b)
+doArith Mod (VInt a) (VInt b) = pure $ VInt (a `mod` b)
 doArith Eql (VInt a) (VInt b) = pure $ if a == b then VRight VUnit else VLeft VUnit
 doArith Less (VInt a) (VInt b) = pure $ if a < b then VRight VUnit else VLeft VUnit
 doArith _ _ _ = raise_ "bad args in Arith"
@@ -239,6 +242,7 @@ opResTy : Op -> ILType
 opResTy Add = IInt
 opResTy Sub = IInt
 opResTy Mul = IInt
+opResTy Mod = IInt
 opResTy Eql = ISum IUnit IUnit
 opResTy Less = ISum IUnit IUnit
 
