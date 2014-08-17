@@ -19,6 +19,9 @@ data il_expr = Var name | Const Int | Unit | Stop
              | Pair il_expr il_expr | Fst il_expr | Snd il_expr              
              | Arith Op il_expr il_expr            
              | Lefta il_expr | Righta il_expr | Case il_expr il_expr il_expr
+             | AMake il_expr                 -- new int[a]
+             | AGet il_expr il_expr          -- a[b]
+             | ASet il_expr il_expr il_expr  -- a[b] := c
 
 instance Eq Op where
   Add == Add = True
@@ -52,6 +55,9 @@ instance Eq il_expr where
   (Lefta a) == (Lefta b) = a == b
   (Righta a) == (Righta b) = a == b
   (Case a1 b1 c1) == (Case a2 b2 c2) = a1 == a2 && b1 == b2 && c1 == c2
+  (AMake a1) == (AMake a2) = a1 == a2
+  (AGet a1 b1) == (AGet a2 b2) = a1 == a2 && b1 == b2
+  (ASet a1 b1 c1) == (ASet a2 b2 c2) = a1 == a2 && b1 == b2 && c1 == c2
   _ == _ = False
 
 instance Show il_expr where
@@ -69,13 +75,16 @@ instance Show il_expr where
   show (Lefta e) = "Left " ++ show e
   show (Righta e) = "Right " ++ show e
   show (Case a b c) = "case " ++ show a ++ " { Left -> " ++ show b ++ " | Right -> " ++ show c ++ " }"
+  show (AMake a) = "new int[" ++ show a ++ "]"
+  show (AGet a b) = show a ++ "[" ++ show b ++ "]"
+  show (ASet a b c) = show a ++ "[" ++ show b ++ "] := " ++ show c
 
 instance Ord il_expr where
   compare a b = compare (show a) (show b)
 
 mutual 
   data rt_val = VInt Int | VUnit | VPair rt_val rt_val | VCont name il_expr Env | VStop
-              | VLeft rt_val | VRight rt_val 
+              | VLeft rt_val | VRight rt_val | VArray (SortedMap Int Int)
 
   Env : Type
   Env = List (name, rt_val)
@@ -88,6 +97,7 @@ instance Show rt_val where
   show VStop = "Stop"
   show (VLeft v) = "Left " ++ show v
   show (VRight v) = "Right " ++ show v
+  show (VArray m) = show $ SortedMap.toList m
 
 RtVal : Type
 RtVal = Either String rt_val 
@@ -135,6 +145,21 @@ eval_il env (Case e (Lambda x1 e1) (Lambda x2 e2)) =
     VRight v => eval_il ((x2, v)::env) e2
     _ => raise_ "Not a sum type value in Case"
 eval_il env (Case _ _ _) = raise_ "Err: Case with not Lambdas"    
+eval_il env (AMake e) = 
+  case !(eval_il env e) of
+    VInt n => return $ VArray (insert (n-1) 0 empty)
+    _ => raise_ "not an Int in AMake"
+eval_il env (AGet a i) =
+  case (!(eval_il env a), !(eval_il env i)) of
+    (VArray m, VInt n) => case lookup n m of
+                            Nothing => raise_ ("AGet out of bounds: " ++ show n)
+                            Just v => return $ VInt v
+    _ => raise_ "type mismatch in AGet"
+eval_il env (ASet a i e) =
+  case (!(eval_il env a), !(eval_il env i), !(eval_il env e)) of
+    (VArray m, VInt n, VInt v) => return $ VArray (insert n v m)
+    _ => raise_ "type mismatch in ASet"
+                          
 
 run_il : Env -> il_expr -> RtVal
 run_il env (RunCont ef ex) = do
@@ -169,9 +194,13 @@ subst var sub ex =
     Lefta e => Lefta $ subst var sub e
     Righta e => Righta $ subst var sub e
     Case a b c => Case (subst var sub a) (subst var sub b) (subst var sub c)
+    AMake a => AMake (subst var sub a)
+    AGet a b => AGet (subst var sub a) (subst var sub b)
+    ASet a b c => ASet (subst var sub a) (subst var sub b) (subst var sub c)
 
                         
-data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse | ISum ILType ILType
+data ILType = IInt | IUnit | IPair ILType ILType | INot ILType | ITypeVar Int | IFalse 
+            | ISum ILType ILType | IArray
 
 instance Show ILType where
   show IInt = "Int"
@@ -181,6 +210,7 @@ instance Show ILType where
   show (ITypeVar n) = "t" ++ show n
   show IFalse = "0"
   show (ISum t1 t2) = "{" ++ show t1 ++ " | " ++ show t2 ++ "}"
+  show IArray = "Int[]"
 
 Ctx : Type
 Ctx = SortedMap il_expr ILType
@@ -208,7 +238,7 @@ first2 v = (head v, head $ tail v)
 total tail2 : Vect (S (S n)) a -> Vect n a
 tail2 v = tail $ tail v
 
-   -- => updated (context, additinal passed types)
+-- => updated (context, additinal passed types)
 unify : Ctx -> Vect n ILType -> ILType -> ILType -> {[EXCEPTION String]} Eff (Ctx, Vect n ILType)
 unify ctx ts (ITypeVar v) t2 = pure $ trace ("tysub t" ++ show v ++ " -> " ++ show t2) $ 
                                  (map (tysub v t2) ctx, map (tysub v t2) ts)
@@ -224,6 +254,7 @@ unify ctx ts (IPair a1 a2) (IPair b1 b2) = do
 unify ctx ts IInt IInt = pure (ctx, ts)
 unify ctx ts IUnit IUnit = pure (ctx, ts)
 unify ctx ts IFalse IFalse = pure (ctx, ts)
+unify ctx ts IArray IArray = pure (ctx, ts)
 unify ctx ts (ISum a1 a2) (ISum b1 b2) = do
   (ctx1, ts') <- unify ctx (a2 :: b2 :: ts) a1 b1
   let (a2', b2') = first2 ts'
@@ -333,6 +364,24 @@ infer_ilt ctx expr =
           ctx3 <- unify_ ctx2 t0 (ISum ty1 ty2)   ---
           pure (IFalse, ctx3)
         _ => raise "Not lambda types found in case"
+    AMake a => do
+      (t, ctx1) <- infer_ilt ctx a
+      ctx2 <- unify_ ctx1 t IInt
+      pure (IArray, ctx2)
+    AGet a b => do
+      (ta, ctx1) <- infer_ilt ctx a
+      (tb, ctx2) <- infer_ilt ctx1 b
+      ctx3 <- unify_ ctx2 ta IArray
+      ctx4 <- unify_ ctx3 tb IInt
+      pure (IInt, ctx4)
+    ASet a b c => do
+      (ta, ctx1) <- infer_ilt ctx a
+      (tb, ctx2) <- infer_ilt ctx1 b
+      (tc, ctx3) <- infer_ilt ctx2 c
+      ctx4 <- unify_ ctx3 ta IArray
+      ctx5 <- unify_ ctx4 tb IInt
+      ctx6 <- unify_ ctx5 tc IInt
+      pure (IArray, ctx6)
 
                      
 total showCtx : Ctx -> String
@@ -347,6 +396,7 @@ tySharp (INot t) = "Kont<" ++ tySharp t ++ ">"
 tySharp IFalse = " Err: 0 type "
 tySharp (ITypeVar n) = " Err: unresolved type var t" ++ show n
 tySharp (ISum a b) = "Sum<" ++ tySharp a ++ ", " ++ tySharp b ++ ">"
+tySharp IArray = "int[]"
 
 addDef : ILType -> String -> {[STATE (List String)]} Eff String
 addDef ty s = do xs <- get
@@ -410,12 +460,19 @@ genSharp ctx (Case e e1 e2) =
     Just (ISum t1 t2) => pure $ "match<" ++ tySharp t1 ++","++ tySharp t2 ++ ">("  ++ !(genSharp ctx e) ++", "
                                ++ !(genSharp ctx e1) ++", "++ !(genSharp ctx e2) ++ ")"
     _ => raise $ "Err: no sum type for " ++ show e
+genSharp ctx (AMake a) = pure $ "new int[" ++ !(genSharp ctx a) ++ "]"
+genSharp ctx (AGet a i) = pure $ !(genSharp ctx a) ++ "[" ++ !(genSharp ctx i) ++ "]"
+genSharp ctx (ASet a i v) = pure $ "set(" ++ !(genSharp ctx a) ++","++ !(genSharp ctx i) 
+                             ++","++  !(genSharp ctx v) ++ ")"
 
 data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Term
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
              | TLeft Term | TRight Term | TCase Term Term Term
              | TIf Term Term Term
              | TRecLambda name name Term
+             | TAMake Term
+             | TAGet Term Term
+             | TASet Term Term Term
 
 infixr 7 =@
 (=@) : Term -> Term -> Term
@@ -478,6 +535,28 @@ mutual
     compile_lazy (Lambda z (Case (Var z) (Lambda v1 case1) (Lambda v2 case2))) sume
   compile_lazy k (TIf cond th el) = 
     compile_lazy k (TCase cond (TLambda !(mkvar "u") el) (TLambda !(mkvar "u") th))
+  compile_lazy k (TAMake n) = do
+    sz <- mkvar "sz"
+    compile_lazy (Lambda sz (RunCont k (AMake (Var sz)))) n
+  compile_lazy k (TAGet a i) = do
+    va <- mkvar "m"
+    vi <- mkvar "i"
+    compile_lazy 
+      (Lambda va !(compile_lazy
+                    (Lambda vi (RunCont k (AGet (Var va) (Var vi)))) 
+                    i)) 
+      a
+  compile_lazy k (TASet a i v) = do
+    va <- mkvar "m"
+    vi <- mkvar "i"
+    vv <- mkvar "v"
+    compile_lazy 
+      (Lambda va !(compile_lazy
+                    (Lambda vi !(compile_lazy 
+                                  (Lambda vv (RunCont k (ASet (Var va) (Var vi) (Var vv))))
+                                  v) ) 
+                    i))
+      a
 
 
 --
@@ -585,8 +664,7 @@ mkSharp e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
               Left err => Left err
               Right (ty, ctx) => 
                 let res = do mainExp <- genSharp ctx e
-                             let resTy = resultType ctx
-                             pure $ rootSharp mainExp resTy
+                             pure $ rootSharp mainExp (resultType ctx)
                 in the (Either String String) $ run res
 
 phi : Either String String -> String
