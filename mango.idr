@@ -152,7 +152,7 @@ eval_il env (AMake e) =
 eval_il env (AGet a i) =
   case (!(eval_il env a), !(eval_il env i)) of
     (VArray m, VInt n) => case lookup n m of
-                            Nothing => raise_ ("AGet out of bounds: " ++ show n)
+                            Nothing => return $ VInt 0 --raise_ ("AGet out of bounds: " ++ show n)
                             Just v => return $ VInt v
     _ => raise_ "type mismatch in AGet"
 eval_il env (ASet a i e) =
@@ -404,8 +404,8 @@ addDef ty s = do xs <- get
                  put $ (tySharp ty ++ " " ++ f ++ " = " ++ s ++ ";") :: xs
                  return f
 
-Ctx2 : Type
-Ctx2 = List (il_expr, ILType)
+--Ctx2 : Type
+--Ctx2 = List (il_expr, ILType)
 
 total argTy : ILType -> String
 argTy (INot t) = tySharp t
@@ -637,8 +637,18 @@ fib = TRecLambda "fib" "x" $ TIf ((TVar "x") <@ (TConst 3))
 prg8 : Term
 prg8 = TApply fib (TConst 8)
 
-prg8_il : il_expr
-prg8_il = runPure $ compile_lazy Stop prg8
+--prg8_il : il_expr
+--prg8_il = runPure $ compile_lazy Stop prg8
+
+prg9 : Term
+prg9 = TAGet (TASet 
+                (TAMake (TConst 5)) 
+                (TConst 4) 
+                (TConst 33)) 
+             (TConst 4) 
+
+mkil : Term -> il_expr
+mkil prg = runPure $ compile_lazy Stop prg
 
 --
 
@@ -671,6 +681,9 @@ phi : Either String String -> String
 phi (Left s) = s
 phi (Right s) = s
 
+compileAndGen : Term -> String
+compileAndGen prg = phi . mkSharp $ mkil prg
+
 main : IO ()
 {-main = do traverse_ putStrLn $ typeCheckIL prg7_il
           let r = the (Either String rt_val) $ run_il [] prg7_il
@@ -678,5 +691,5 @@ main : IO ()
             Left err => putStrLn err
             Right v => print v-}
 
-main = putStrLn $ phi $ mkSharp prg8_il
+main = putStrLn $ compileAndGen prg9
 --main = print $ run_il [] prg6_il

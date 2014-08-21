@@ -15,7 +15,6 @@ namespace mangolian
     struct Unit {}
 
     delegate Thunk Thunk();
-
     delegate Thunk Kont<T>(T x);
 
     class Res<T> : Exception
@@ -57,20 +56,17 @@ namespace mangolian
             return p;
         }
 
-        static Unit unit; //() { Unit u; return u; }
+        static Unit unit; 
 
         static Thunk run<T>(Kont<T> f, T x)
         {
             return f(x);
         }
 
-        //delegate Thunk RF<T>(T x, Kont<T> f); (T, T->Th) -> Th
         static Kont<T> unrec<T>(RF<T> rf)
         {
             return new UnRec<T>(rf).g;
         }
-
-
 
         static Sum<A, B> left<A, B>(A a)
         {
@@ -102,13 +98,21 @@ namespace mangolian
             else return left<Unit, Unit>(unit);
         }
 
+        static int[] set(int[] a, int i, int v)
+        {
+            a[i] = v;
+            return a;
+        }
+
         static void Main(string[] args)
         {
-            Thunk fmain_ = () => run<int>(a3 => () => run<int>(b4 => () => run<Sum<Unit, Unit>>(z2 => match<Unit, Unit>(z2, u0 => () => run<int>(x => { throw new Res<int>(x); }, 20), u1 => () => run<int>(x => { throw new Res<int>(x); }, 1)), less(a3, b4)), 70), 82);
+            Thunk fmain = () => run<int>(sz5 => () => run<int[]>(m2 => () => run<int>(i3 => () => run<int>(v4 => () => 
+                run<int[]>(m0 => () => run<int>(i1 => () => run<int>(x => { throw new Res<int>(x); }, m0[i1]), 4), set(m2, i3, v4)), 
+                33), 4), new int[sz5]), 5); 
             //RF<int> fff = (int x, Kont<int> f) => { if (x > 200) throw new Res<int>(x); else return run<int>(f, x * 2); };
             //Thunk fmain = () => run<int>(unrec<int>((x, f) => { if (x > 200) throw new Res<int>(x); else return run<int>(f, x * 2); }), 1);
             //Thunk fmain = () => run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(x0 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x0, pair<Kont<Kont<int>>, Kont<int>>(k1 => () => run<int>(k1, 2), x => { throw new Res<int>(x); })), unrec<Pair<Kont<Kont<int>>, Kont<int>>>((w2, rec3) => () => run<Kont<int>>(w2.fst, a12 => () => run<int>(b13 => () => run<Sum<Unit, Unit>>(z7 => match<Unit, Unit>(z7, u5 => () => run<Kont<int>>(w2.fst, w2.snd), u6 => () => run<Kont<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>>(u4 => () => run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(u4, rec3), x8 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x8, pair<Kont<Kont<int>>, Kont<int>>(k9 => () => run<Kont<int>>(w2.fst, a10 => () => run<int>(b11 => () => run<int>(k9, (a10 + b11)), 10)), w2.snd)))), less(a12, b13)), 50)))); 
-            Thunk fmain = () => run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(x0 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x0, pair<Kont<Kont<int>>, Kont<int>>(k1 => () => run<int>(k1, 8), x => { throw new Res<int>(x); })), unrec<Pair<Kont<Kont<int>>, Kont<int>>>((w2, rec3) => () => run<Kont<int>>(w2.fst, a18 => () => run<int>(b19 => () => run<Sum<Unit, Unit>>(z7 => match<Unit, Unit>(z7, u5 => () => run<Kont<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>>(u4 => () => run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(u4, rec3), x14 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x14, pair<Kont<Kont<int>>, Kont<int>>(k15 => () => run<Kont<int>>(w2.fst, a16 => () => run<int>(b17 => () => run<int>(k15, (a16 - b17)), 1)), a8 => () => run<Kont<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>>(u4 => () => run<Kont<Pair<Kont<Kont<int>>, Kont<int>>>>(u4, rec3), x10 => () => run<Pair<Kont<Kont<int>>, Kont<int>>>(x10, pair<Kont<Kont<int>>, Kont<int>>(k11 => () => run<Kont<int>>(w2.fst, a12 => () => run<int>(b13 => () => run<int>(k11, (a12 - b13)), 2)), b9 => () => run<int>(w2.snd, (a8 + b9)))))))), u6 => () => run<int>(w2.snd, 1)), less(a18, b19)), 3)))); 
+            
             try
             {
                 while (true)
@@ -120,6 +124,8 @@ namespace mangolian
             {
                 Console.WriteLine("result: {0}", r.res);
             }
+
+            
 
         }//main
     }
