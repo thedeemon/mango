@@ -469,10 +469,11 @@ data Term = TVar name | TConst Int | TUnit | TLambda name Term | TApply Term Ter
              | TPair Term Term | TFst Term | TSnd Term | TArith Op Term Term
              | TLeft Term | TRight Term | TCase Term Term Term
              | TIf Term Term Term
-             | TRecLambda name name Term
+             | TRecLambda name name Term   -- \ f x body
              | TAMake Term
              | TAGet Term Term
              | TASet Term Term Term
+             | TLet name Term Term -- let nm = a in b
 
 infixr 7 =@
 (=@) : Term -> Term -> Term
@@ -481,6 +482,9 @@ a =@ b = TArith Eql a b
 infixr 7 <@
 (<@) : Term -> Term -> Term
 a <@ b = TArith Less a b
+
+tmod : Term -> Term -> Term
+tmod a b = TArith Mod a b
 
 mkvar : String -> { [STATE Int] } Eff String
 mkvar v = do n <- get
@@ -557,100 +561,15 @@ mutual
                                   v) ) 
                     i))
       a
+  compile_lazy k (TLet v wat were) = compile_lazy k (TApply (TLambda v were) wat)
 
-
---
-{- f : Term
-f = TLambda "a" (TLambda "b" (TArith Add (TVar "a") (TVar "b")))
-
-v1 : Term
-v1 = TConst 5
-v2 : Term
-v2 = TConst 3
-
-prg : Term
-prg = TApply (TApply f v1) v2
-
-prg_il : il_expr
-prg_il = runPure $ compile_lazy Stop prg
-
-prg2 : Term
-prg2 = TFst (TPair (TConst 2) TUnit)
-
-prg2_il : il_expr
-prg2_il = runPure $ compile_lazy Stop prg2
-
-prg3 : Term
-prg3 = TArith Add (TConst 1) (TConst 2)
-
-prg3_il : il_expr
-prg3_il = runPure $ compile_lazy Stop prg3
-
-prg4_il : il_expr
-prg4_il = Case (Righta (Const 2)) 
-            (Lambda "x" (Arith Add (Var "x") (Const 5)))
-            (Lambda "y" (Arith Mul (Var "y") (Const 5)))
-            -}
 typeCheckIL : il_expr -> List String
 typeCheckIL e = case the (Either String (ILType, Ctx)) $ run $ infer_ilt empty e of
                   Left err => [err]
                   Right (t, ctx) => map show $ SortedMap.toList ctx
 
-
-{-prg5 : Term
-prg5 = TIf ((TConst 12) <@ (TConst 70)) 
-             (TConst 1) 
-             (TConst 20)
-
-prg5_il : il_expr
-prg5_il = runPure $ compile_lazy Stop prg5
--}
-frec : Term
-frec = TRecLambda "f" "x" $ TIf ((TVar "x") <@ (TConst 50)) 
-                                (TApply (TVar "f") (TArith Add (TVar "x") (TConst 10)))
-                                (TVar "x")
-
-frec2 : Term
-frec2 = TRecLambda "f" "x" $ TApply (TVar "f") (TConst 99)
-
-prg6 : Term
-prg6 = TApply frec (TConst 2)
-
-prg6_il : il_expr
-prg6_il = runPure $ compile_lazy Stop prg6
-
-prg7_il : il_expr
-prg7_il = RunCont f (Const 4) where
-  f : il_expr
-  f = RecLambda "f" "x" $
-        Case (Arith Less (Var "x") (Const 100))
-          (Lambda "b" (Var "x"))
-          (Lambda "a" (RunCont (Var "f") (Arith Add (Var "x") (Const 30))))
-
-fib : Term
-fib = TRecLambda "fib" "x" $ TIf ((TVar "x") <@ (TConst 3)) 
-                                   (TConst 1)
-                                   (TArith Add
-                                     (TApply (TVar "fib") (TArith Sub (TVar "x") (TConst 1)))
-                                     (TApply (TVar "fib") (TArith Sub (TVar "x") (TConst 2))))
-
-prg8 : Term
-prg8 = TApply fib (TConst 8)
-
---prg8_il : il_expr
---prg8_il = runPure $ compile_lazy Stop prg8
-
-prg9 : Term
-prg9 = TAGet (TASet 
-                (TAMake (TConst 5)) 
-                (TConst 4) 
-                (TConst 33)) 
-             (TConst 4) 
-
 mkil : Term -> il_expr
 mkil prg = runPure $ compile_lazy Stop prg
-
---
 
 rootSharp : String -> String -> String
 rootSharp exp resTy = unwords $ intersperse "\n" ["Thunk fmain = " ++ exp ++ ";",
@@ -684,6 +603,44 @@ phi (Right s) = s
 compileAndGen : Term -> String
 compileAndGen prg = phi . mkSharp $ mkil prg
 
+implicit tvar : String -> Term
+tvar nm = TVar nm
+
+instance Num Term where
+  (+) = TArith Add
+  (-) = TArith Sub
+  (*) = TArith Mul
+  abs x = x
+  fromInteger x = TConst (fromInteger x)
+
+-------------------------------------
+--external vars: 
+-- code : int[]
+-- email : int[]
+-- elen : int = email.length
+
+row1 : List Int
+row1 = [0x67, 0xda, 0x9c, 0x87, 0x9c, 0x6a, 0x42, 0xd7, 0x9e, 0x16, 0x47, 0xf1, 0xd1, 0x73, 0xef, 0x45]
+
+matrow : Term
+matrow = foldl f (TAMake 16) (zip row1 [(the Int 0)..15] refl) where
+          f m (x,i) = TASet m (TConst i) (TConst x) 
+
+emloop : Term
+emloop = TRecLambda "emloop" "i"
+          (TLet "p" (((TAGet "matrow" "i") * (TAGet "email" ("i" `tmod` "elen"))) `tmod` 256)
+            (TIf ("i" =@ 15) "p" ("p" + (TApply "emloop" ("i" + 1))))
+            ) 
+
+calccode : Term
+calccode = TLet "matrow" matrow (TApply emloop 0)
+
+prg_hex : Term
+prg_hex = TLet "fromHex"  (TLambda "x" (TIf ("x" <@ 60) ("x" - 48) ("x" - 55)))
+              ((TApply "fromHex" (TAGet "code" 3)) * 256 + 
+               (TApply "fromHex" (TAGet "code" 4)) * 16 +
+               (TApply "fromHex" (TAGet "code" 5))) 
+
 main : IO ()
 {-main = do traverse_ putStrLn $ typeCheckIL prg7_il
           let r = the (Either String rt_val) $ run_il [] prg7_il
@@ -691,5 +648,5 @@ main : IO ()
             Left err => putStrLn err
             Right v => print v-}
 
-main = putStrLn $ compileAndGen prg9
+main = putStrLn $ compileAndGen calccode
 --main = print $ run_il [] prg6_il
