@@ -618,6 +618,7 @@ instance Num Term where
 -- code : int[]
 -- email : int[]
 -- elen : int = email.length
+-- r : int[]  (100 elements)
 
 row1 : List Int
 row1 = [0x67, 0xda, 0x9c, 0x87, 0x9c, 0x6a, 0x42, 0xd7, 0x9e, 0x16, 0x47, 0xf1, 0xd1, 0x73, 0xef, 0x45]
@@ -632,21 +633,52 @@ emloop = TRecLambda "emloop" "i"
             (TIf ("i" =@ 15) "p" ("p" + (TApply "emloop" ("i" + 1))))
             ) 
 
-calccode : Term
+calccode : Term -- => int
 calccode = TLet "matrow" matrow (TApply emloop 0)
 
-prg_hex : Term
+prg_hex : Term -- [code] => int
 prg_hex = TLet "fromHex"  (TLambda "x" (TIf ("x" <@ 60) ("x" - 48) ("x" - 55)))
               ((TApply "fromHex" (TAGet "code" 3)) * 256 + 
                (TApply "fromHex" (TAGet "code" 4)) * 16 +
                (TApply "fromHex" (TAGet "code" 5))) 
 
+fill_r : Term -- [r] => int[]
+fill_r = foldl f (TVar "r") lst where
+          f m (i,v) = TASet m (TConst i) v
+          lst : List (Int, Term)
+          lst = [(11, (0 - ((TAGet "r" 24) + (TAGet "r" 66)))),
+                 (32, (0 - ((TAGet "r" 7) + (TAGet "r" 55) - 1))),
+                 (69, (0 - ((TAGet "r" 81) + (TAGet "r" 15) - 175))),
+                 (27, (0 - ((TAGet "r" 14) + (TAGet "r" 52)))),
+                 (0, 1)
+                ] 
+
+updays : Term -- int[] -> int[]
+updays = TLambda "q" 
+          (TIf ((TAGet "q" 13) <@ 31)
+            (TASet "q" 93 (30 - (TAGet "q" 13)))
+            "q")
+
+inc27 : Term -- int[] -> int[]
+inc27 = TLambda "arr" (TASet "arr" 27 ((TAGet "arr" 27) + 1)) 
+
+prg_check : Term -- => int[]
+prg_check = TLet "rr" (TApply updays fill_r)
+             (TIf ("elen" <@ 1) "rr"
+              (TIf ("codelen" <@ 6) "rr"
+               (TLet "codeval" prg_hex 
+                (TLet "sum" calccode 
+                 (TIf ("codeval" =@ "sum") 
+                   (TApply inc27 (TASet "rr" 1 1) )
+                   --else 
+                   ("rr") )))))
+
 main : IO ()
+main = putStrLn $ compileAndGen prg_check
+
 {-main = do traverse_ putStrLn $ typeCheckIL prg7_il
           let r = the (Either String rt_val) $ run_il [] prg7_il
           case r of
             Left err => putStrLn err
             Right v => print v-}
-
-main = putStrLn $ compileAndGen calccode
 --main = print $ run_il [] prg6_il
