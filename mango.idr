@@ -649,8 +649,7 @@ fill_r = foldl f (TVar "r") lst where
           lst = [(11, (0 - ((TAGet "r" 24) + (TAGet "r" 66)))),
                  (32, (0 - ((TAGet "r" 7) + (TAGet "r" 55) - 1))),
                  (69, (0 - ((TAGet "r" 81) + (TAGet "r" 15) - 175))),
-                 (27, (0 - ((TAGet "r" 14) + (TAGet "r" 52)))),
-                 (0, 1)
+                 (27, (0 - ((TAGet "r" 14) + (TAGet "r" 52))))
                 ] 
 
 updays : Term -- int[] -> int[]
@@ -662,16 +661,19 @@ updays = TLambda "q"
 inc27 : Term -- int[] -> int[]
 inc27 = TLambda "arr" (TASet "arr" 27 ((TAGet "arr" 27) + 1)) 
 
+rr01 : Term
+rr01 = TASet "rr" 0 1
+
 prg_check : Term -- => int[]
 prg_check = TLet "rr" (TApply updays fill_r)
-             (TIf ("elen" <@ 1) "rr"
-              (TIf ("codelen" <@ 6) "rr"
+             (TIf ("elen" <@ 1) rr01
+              (TIf ("codelen" <@ 6) rr01
                (TLet "codeval" prg_hex 
                 (TLet "sum" calccode 
                  (TIf ("codeval" =@ "sum") 
-                   (TApply inc27 (TASet "rr" 1 1) )
+                   (TASet (TApply inc27 (TASet "rr" 1 1) ) 0 1)
                    --else 
-                   ("rr") )))))
+                   rr01 )))))
 
 main : IO ()
 main = putStrLn $ compileAndGen prg_check
